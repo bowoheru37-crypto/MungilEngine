@@ -3,13 +3,12 @@ export type GameShellState = 'landing' | 'title' | 'playing' | 'paused' | 'victo
 export type StudioTab =
   | 'play'
   | 'scene'
+  | 'agent'
   | 'assets'
   | 'generators'
   | 'controls'
   | 'art'
   | 'lab'
-  | 'agent'
-  | 'arena'
   | 'skills'
   | 'services'
   | 'export';
@@ -163,6 +162,24 @@ export interface HudSnapshot {
   speedKmh?: number;
   vnPrompt?: string;
   vnChoices?: string[];
+  aiMode?: AiPlayMode;
+  aiNote?: string;
+}
+
+export type SaveSlotId = 1 | 2 | 3 | 'auto';
+
+export interface SavedWorldProgress {
+  genreId: string;
+  playerX: number;
+  playerY: number;
+  lanternHp?: number;
+  trackDist?: number;
+  vnStep?: number;
+  elapsedSec?: number;
+  collectedShardIds: number[];
+  collectedCoinIds: number[];
+  activatedSwitchIds: number[];
+  defeatedEnemyIds: number[];
 }
 
 export interface SaveSlotData {
@@ -180,7 +197,23 @@ export interface SaveSlotData {
   potions: number;
   styleId: ArtStyleId;
   updatedAt: string;
+  worldState?: SavedWorldProgress;
   checksum: string;
+}
+
+export interface SaveSlotSummary {
+  id: SaveSlotId;
+  exists: boolean;
+  bytes: number;
+  level: 1 | 2 | 3;
+  genreId: string;
+  hp: number;
+  coins: number;
+  score: number;
+  updatedAt: string;
+  checksumValid: boolean;
+  migrated: boolean;
+  data: SaveSlotData | null;
 }
 
 export type GenreSimulationKind =
@@ -383,134 +416,286 @@ export interface AgentSkillFile {
   content: string;
 }
 
-export interface BoneSpringState {
-  cloakOffsetX: number;
-  cloakVelX: number;
-  cloakOffsetY: number;
-  cloakVelY: number;
-  blendAlpha: number;
-  prevPose: CharacterAnimState;
-}
-
-export interface EngineLayerSpec {
-  layer: number;
-  id: string;
+export interface GeneratedImageSpriteSpec {
+  seed: number;
+  prompt: string;
   title: string;
-  subtitle: string;
-  mobileStrategy: string;
-  itelA70Budget: string;
-  systems: Array<{ code: string; name: string; detail: string }>;
+  styleId: ArtStyleId;
+  palette: [string, string, string, string];
+  size: 16;
+  grid: number[][];
 }
 
-export interface HardenedRuleCheck {
-  code: string;
-  title: string;
-  status: 'pass' | 'warn';
-  metric: string;
+export interface AtelierBonePose {
+  tint: string;
+  roughness: number;
+  sx: number;
+  sy: number;
+  sz: number;
+  bones: Record<string, [number, number, number]>;
 }
 
-export interface FrameBudgetMetrics {
-  simMs: number;
-  renderMs: number;
-  frameMs: number;
-  drawCalls: number;
-  culledCount: number;
-  heapMb: number;
-  aiHz: 15 | 30 | 60;
+export interface GeneratedStateMachineSpec {
+  seed: number;
+  kind: 'movement' | 'behavior';
+  name: string;
+  initialState: string;
+  states: Array<{ id: string; speedMul: number; durationSec: number; animation: CharacterAnimState }>;
+  transitions: Array<{ from: string; event: string; to: string }>;
+  bytecodeSnippet: string;
 }
 
-export type PhysicsPresetId = 'NORMAL' | 'BOUNCY' | 'HEAVY' | 'GHOST' | 'SLIPPERY' | 'BALL';
+export interface GeneratedGameplayBundleSpec {
+  seed: number;
+  prompt: string;
+  genreId: string;
+  physicsMode: PhysicsMode;
+  gravityMul: number;
+  speedMul: number;
+  uiTheme: { accent: string; radiusPx: number; hudLayout: 'compact-mobile' | 'arcade-wide' };
+  rules: Array<{ condition: string; action: string }>;
+  sceneTitle: string;
+  enemiesCount: number;
+  platformsCount: number;
+}
 
-export interface PhysicsPresetSpec {
-  id: PhysicsPresetId;
-  label: string;
-  mass: number;
-  friction: number;
+export interface GeneratedDubbingSpec {
+  seed: number;
+  speaker: string;
+  lang: LanguageCode;
+  text: string;
+  pitchHz: number;
+  rate: number;
+  durationSec: number;
+  srtText: string;
+  vttText: string;
+}
+
+export interface GeneratedTargetConfigSpec {
+  seed: number;
+  target: 'web' | 'apk' | 'mcp' | 'ai_engine';
+  appName: string;
+  packageId: string;
+  summary: string;
+  configJson: string;
+}
+
+export type PhysicsPresetId = 'default' | 'bouncy' | 'heavy' | 'ghost' | 'slippery' | 'zero_g';
+
+export interface EntityPhysicsConfig {
   restitution: number;
+  friction: number;
   gravityScale: number;
-  linearDamp: number;
-  bounceThreshold: number;
+  density: number;
   isTrigger: boolean;
-  bodyType: 'Dynamic' | 'Kinematic';
-  shape: 'Box' | 'Circle';
-  ccd: boolean;
-  alpha: number;
-  note: string;
+  collisionEnabled: boolean;
 }
+
+export type CollisionShapeKind = 'box' | 'circle';
+
+export interface CollisionShapeSpec {
+  kind: CollisionShapeKind;
+  w: number;
+  h: number;
+  radius: number;
+  offsetX: number;
+  offsetY: number;
+}
+
+export type SceneEntityKind = 'player' | 'enemy' | 'platform' | 'obstacle' | 'pickup' | 'container';
 
 export interface SceneEntityNode {
   id: string;
   name: string;
-  type: 'Player' | 'NPC' | 'Enemy' | 'Item' | 'Prop' | 'Trigger' | 'CONTAINER';
+  kind: SceneEntityKind;
+  parentId: string | null;
+  children: string[];
   x: number;
   y: number;
-  sx: number;
-  sy: number;
-  rot: number;
-  parent: string | null;
-  locked: boolean;
-  hidden: boolean;
-  preset: PhysicsPresetId;
-}
-
-export interface CollisionVertex {
-  x: number;
-  y: number;
-}
-
-export interface CollisionShapeSpec {
-  id: string;
-  entityId: string;
-  type: 'Box' | 'Circle' | 'Polygon';
-  w: number;
-  h: number;
-  r: number;
-  ox: number;
-  oy: number;
-  rot: number;
+  scaleX: number;
+  scaleY: number;
+  rotationDeg: number;
   color: string;
-  verts: CollisionVertex[];
+  physicsPreset: PhysicsPresetId;
+  physics: EntityPhysicsConfig;
+  collider: CollisionShapeSpec;
 }
 
-export interface ShapeOverlapItem {
-  otherShapeId: string;
-  entityName: string;
-  penetrationPx: number;
-  hit: boolean;
-  near: boolean;
+export interface CollisionOverlapInfo {
+  aId: string;
+  bId: string;
+  aName: string;
+  bName: string;
+  depth: number;
+  isTriggerOverlap: boolean;
 }
 
-export interface ShapeOverlapResult {
-  status: 'none' | 'near' | 'overlap';
-  items: ShapeOverlapItem[];
+export type AiPlayMode = 'off' | 'coop' | 'autopilot';
+
+export type PerspectiveConnectorId =
+  | '2d_side_h'
+  | '2d_side_v'
+  | '2_5d_parallax'
+  | 'fake_3d_raycast'
+  | 'pseudo_3d_zstack'
+  | 'isometric'
+  | 'hexagonal'
+  | 'top_down'
+  | 'first_person'
+  | 'third_person';
+
+export type VisualQualityPresetId = 'pixel_retro' | 'mobile_eco' | 'hd_stylized' | 'ultra_pbr';
+
+export interface AiCompanionState {
+  active: boolean;
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  facing: 1 | -1;
+  actionLabel: string;
+  shootCooldown: number;
+  healCooldown: number;
+  tickParity: number;
 }
 
-export type ArenaMode = 'solo' | 'coplay' | 'vs';
-export type ArenaCoachDirective = 'Agresif' | 'Seimbang' | 'Bertahan' | 'Farming';
-export type ArenaCompanionOrder = 'Ikut' | 'Serang' | 'Bertahan' | 'Ambil Item' | 'Heal';
-export type ArenaDifficulty = 'Easy' | 'Normal' | 'Hard';
+export interface McpToolCallResult {
+  tool: string;
+  ok: boolean;
+  summary: string;
+  data: Record<string, unknown>;
+}
 
-export interface WizardGameSpec {
+export interface AgentChatMessage {
   id: string;
-  name: string;
-  genre: 'Platformer' | 'Fighter' | 'RPG' | 'Runner' | 'Arena';
-  sprite: string;
-  characterName: string;
-  preset: PhysicsPresetId;
-  map: 'Arena Qolbu' | 'Desa Fajar' | 'Jembatan Cahaya';
-  enemies: number;
-  items: number;
-  aiMode: 'Sendiri' | 'Bareng' | 'Lawan';
-  difficulty: ArenaDifficulty;
-  durationSec: number;
+  role: 'user' | 'agent';
+  text: string;
+  toolTrace?: McpToolCallResult;
   createdAt: string;
 }
 
-export interface McpToolSpec {
-  id: string;
+export interface EngineConnectorPlugin {
+  id: PerspectiveConnectorId;
+  label: string;
+  category: '2D' | '2.5D / Fake-3D' | 'Grid / Top-Down' | '3D Camera';
+  renderMode: RenderMode;
+  physicsMode: PhysicsMode;
+  recommendedStyle: ArtStyleId;
+  summary: string;
+}
+
+export interface QolbuStageResult {
+  stage: number;
   name: string;
-  desc: string;
-  params: string;
+  metric: string;
+  target: string;
+  passed: boolean;
+}
+
+export interface QolbuAuditReport {
+  maxEntities: number;
+  particlePoolSize: number;
+  audioPoolSize: number;
+  memoryBudgetMb: number;
+  frameBudgetMs: number;
+  aiHz: number;
+  fuzzEventsTested: number;
+  fuzzBlockedCount: number;
+  stages: QolbuStageResult[];
+  allPassed: boolean;
+}
+
+export type Camera3DPresetId = 'iso_fixed' | 'follow_3_4' | 'fps_raycast';
+
+export type HybridRender5Mode =
+  | 'hybrid_2_5d_billboard'
+  | 'real_3d_lowpoly'
+  | 'raycast_pseudo3d'
+  | 'mode7_voxel'
+  | 'isometric_painter';
+
+export type GitHubRepoCategory =
+  | 'fake_3d_raycast'
+  | 'mode7_voxel'
+  | 'isometric_2_5d'
+  | 'web_mobile_lightweight'
+  | '3d_mesh_generators'
+  | 'ai_game_generators';
+
+export interface GitHubRepoPlugin {
+  id: string;
+  repo: string;
+  url: string;
+  category: GitHubRepoCategory;
+  license: string;
+  starsLabel: string;
+  dnaPattern: string;
+  supportedPerspectives: PerspectiveConnectorId[];
+  recommendedHybridMode: HybridRender5Mode;
+  recommendedCamera: Camera3DPresetId;
+  maxDrawCallsBudget: number;
+  maxTrisBudget: number;
+  source?: 'curated-offline' | 'live-github';
+}
+
+export interface Vec3Tuple {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface Mesh3DTriangle {
+  a: number;
+  b: number;
+  c: number;
+  color: string;
+}
+
+export interface GeneratedMesh3DSpec {
+  seed: number;
+  prompt: string;
+  title: string;
+  archetype: 'character' | 'prop' | 'citadel' | 'vehicle' | 'crystal';
+  shaderTag: 'ForwardMobile_LambertFog';
+  atlasBudget: '1024x1024 ASTC-6x6 (1 active)';
+  blobShadow: boolean;
+  vertices: Vec3Tuple[];
+  triangles: Mesh3DTriangle[];
+  lodCounts: { lod0: number; lod1: number; lod2: number };
+  triBudgetLimit: number;
+  drawCallsEst: number;
+  repoPluginId: string;
+  objText: string;
+  gltfJson: string;
+}
+
+export interface GeneratedGameBlueprintSpec {
+  seed: number;
+  prompt: string;
+  title: string;
+  genreId: string;
+  simKind: GenreSimulationKind;
+  renderMode: RenderMode;
+  physicsMode: PhysicsMode;
+  connectorId: PerspectiveConnectorId;
+  cameraPreset: Camera3DPresetId;
+  hybridMode: HybridRender5Mode;
+  aiMode: AiPlayMode;
+  styleId: ArtStyleId;
+  speedMul: number;
+  gravityMul: number;
+  levelQuests: Array<{ level: 1 | 2 | 3; title: string; objective: string }>;
+  prefabs: Array<{ name: string; role: string; triCount: number; collider: string }>;
+  rules: Array<{ condition: string; action: string }>;
+  bytecodeScript: string;
+  repoStack: string[];
+  budgetReport: {
+    targetFps: 30;
+    drawCallsEst: number;
+    trisEst: number;
+    ramMbEst: number;
+    passesA70: boolean;
+  };
 }
 
 

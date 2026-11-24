@@ -1,33 +1,22 @@
 import { computeChecksum } from './bytecode';
-import { DEFAULT_COLLISION_SHAPES, DEFAULT_SCENE_ENTITIES } from './scenePhysics';
-import { STARTER_WIZARD_GAMES } from './qolbuAgent';
 import type {
   AnalyticsSummary,
   ArtStyleId,
   AuthProfile,
-  CollisionShapeSpec,
-  EventSheetRule,
   SaveSlotData,
-  SceneEntityNode,
+  SaveSlotId,
+  SaveSlotSummary,
+  SavedWorldProgress,
   TouchControlConfig,
-  WizardGameSpec,
 } from './types';
 
 const SAVE_KEY_PREFIX = 'mungil_v7_save_slot_';
+const AUTO_SAVE_KEY = 'mungil_v7_save_auto';
 const TOUCH_CONFIG_KEY = 'mungil_v7_touch_config';
 const ANALYTICS_KEY = 'mungil_v7_analytics';
 const AUTH_KEY = 'mungil_v7_auth';
 const PIXEL_ART_KEY = 'mungil_v7_pixel_art';
 const TILEMAP_KEY = 'mungil_v7_tilemap';
-const EVENT_RULES_KEY = 'mungil_v7_event_rules';
-const MY_GAMES_KEY = 'mungil_v7_my_games';
-const SCENE_ENTITIES_KEY = 'mungil_v7_scene_entities';
-const COLLISION_SHAPES_KEY = 'mungil_v7_collision_shapes';
-
-export const DEFAULT_EVENT_RULES: EventSheetRule[] = [
-  { id: 'ev1', enabled: true, condition: 'ON_SHARD_COLLECT', action: 'ADD_SCORE_25' },
-  { id: 'ev2', enabled: true, condition: 'ON_LOW_HP', action: 'HEAL_15' },
-];
 
 export const DEFAULT_TOUCH_CONFIG: TouchControlConfig = {
   joystickSide: 'left',
@@ -76,18 +65,59 @@ function safeGetItem(key: string): string | null {
   }
 }
 
-function safeSetItem(key: string, value: string): void {
+function safeSetItem(key: string, value: string): boolean {
   try {
     if (typeof localStorage !== 'undefined') {
       localStorage.setItem(key, value);
+      return true;
     }
+    return false;
   } catch {
-    // Ignore storage quota errors on private browsing
+    // Ignore storage quota errors on private browsing / low-end devices
+    return false;
   }
 }
 
 function clamp(val: number, min: number, max: number): number {
+  if (!Number.isFinite(val)) return min;
   return Math.max(min, Math.min(max, Math.round(val)));
+}
+
+function clampFloat(val: number, min: number, max: number): number {
+  if (!Number.isFinite(val)) return min;
+  return Math.max(min, Math.min(max, Number(val.toFixed(1))));
+}
+
+function sanitizeIdList(raw: unknown, maxLen = 64): number[] {
+  if (!Array.isArray(raw)) return [];
+  const out: number[] = [];
+  for (let i = 0; i < Math.min(raw.length, maxLen); i++) {
+    const n = Math.round(Number(raw[i]));
+    if (Number.isFinite(n) && n >= 0 && n <= 9999 && !out.includes(n)) {
+      out.push(n);
+    }
+  }
+  return out;
+}
+
+function sanitizeWorldState(raw: unknown): SavedWorldProgress | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const r = raw as Record<string, unknown>;
+  const genreId = typeof r.genreId === 'string' && r.genreId.length <= 32 ? r.genreId : 'platformer';
+  const result: SavedWorldProgress = {
+    genreId,
+    playerX: clampFloat(Number(r.playerX ?? 84), 0, 2000),
+    playerY: clampFloat(Number(r.playerY ?? 348), 0, 600),
+    collectedShardIds: sanitizeIdList(r.collectedShardIds, 16),
+    collectedCoinIds: sanitizeIdList(r.collectedCoinIds, 32),
+    activatedSwitchIds: sanitizeIdList(r.activatedSwitchIds, 16),
+    defeatedEnemyIds: sanitizeIdList(r.defeatedEnemyIds, 32),
+  };
+  if (r.lanternHp !== undefined) result.lanternHp = clamp(Number(r.lanternHp), 0, 100);
+  if (r.trackDist !== undefined) result.trackDist = clampFloat(Number(r.trackDist), 0, 99999);
+  if (r.vnStep !== undefined) result.vnStep = clamp(Number(r.vnStep), 0, 10);
+  if (r.elapsedSec !== undefined) result.elapsedSec = clampFloat(Number(r.elapsedSec), 0, 86400);
+  return result;
 }
 
 export function buildSavePayload(
@@ -103,9 +133,11 @@ export function buildSavePayload(
     kills: number;
     potions: number;
     styleId: ArtStyleId;
+    worldState?: SavedWorldProgress;
   }
 ): SaveSlotData {
-  const core = {
+  const cleanWorldState = input.worldState ? sanitizeWorldState(input.worldState) : undefined;
+  const core: Record<string, unknown> = {
     slot,
     version: '7.0.0',
     gameTitle: input.gameTitle.slice(0, 64) || 'Bowo: Penjaga Cahaya',
@@ -121,8 +153,12 @@ export function buildSavePayload(
     updatedAt: new Date().toISOString(),
   };
 
+  if (cleanWorldState) {
+    core.worldState = cleanWorldState;
+  }
+
   return {
-    ...core,
+    ...(core as unknown as Omit<SaveSlotData, 'checksum'>),
     checksum: computeChecksum(JSON.stringify(core)),
   };
 }
@@ -142,7 +178,9 @@ export function parseAndMigrateSave(rawJson: string, fallbackSlot: 1 | 2 | 3 = 1
   const legacyLevelRaw = Number(parsed.level ?? parsed.chapter ?? 1);
   const clampedLevel = (legacyLevelRaw >= 3 ? 3 : legacyLevelRaw === 2 ? 2 : 1) as 1 | 2 | 3;
 
-  const normalizedCore = {
+  const cleanWorldState = sanitizeWorldState(parsed.worldState);
+
+  const normalizedCore: Record<string, unknown> = {
     slot: (Number(parsed.slot) === 2 ? 2 : Number(parsed.slot) === 3 ? 3 : fallbackSlot) as 1 | 2 | 3,
     version: '7.0.0',
     gameTitle: typeof parsed.gameTitle === 'string' ? parsed.gameTitle : 'Bowo: Penjaga Cahaya',
@@ -158,6 +196,10 @@ export function parseAndMigrateSave(rawJson: string, fallbackSlot: 1 | 2 | 3 = 1
     updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date().toISOString(),
   };
 
+  if (cleanWorldState) {
+    normalizedCore.worldState = cleanWorldState;
+  }
+
   let checksumValid = true;
   if (!isLegacy && typeof parsed.checksum === 'string') {
     const expected = computeChecksum(JSON.stringify(normalizedCore));
@@ -166,7 +208,7 @@ export function parseAndMigrateSave(rawJson: string, fallbackSlot: 1 | 2 | 3 = 1
 
   return {
     data: {
-      ...normalizedCore,
+      ...(normalizedCore as unknown as Omit<SaveSlotData, 'checksum'>),
       migratedFrom: isLegacy ? rawVersion : undefined,
       checksum: computeChecksum(JSON.stringify(normalizedCore)),
     },
@@ -175,27 +217,112 @@ export function parseAndMigrateSave(rawJson: string, fallbackSlot: 1 | 2 | 3 = 1
   };
 }
 
-export function saveSlotLocal(data: SaveSlotData): void {
-  safeSetItem(`${SAVE_KEY_PREFIX}${data.slot}`, JSON.stringify(data));
+export function saveSlotLocal(data: SaveSlotData, id: SaveSlotId = data.slot): { ok: boolean; bytes: number } {
+  const serialized = JSON.stringify(data);
+  const key = id === 'auto' ? AUTO_SAVE_KEY : `${SAVE_KEY_PREFIX}${id}`;
+  const ok = safeSetItem(key, serialized);
+  return { ok, bytes: serialized.length };
 }
 
-export function loadSlotLocal(slot: 1 | 2 | 3): { data: SaveSlotData; migrated: boolean; checksumValid: boolean } | null {
-  const raw = safeGetItem(`${SAVE_KEY_PREFIX}${slot}`);
+export function loadSlotLocal(id: SaveSlotId): { data: SaveSlotData; migrated: boolean; checksumValid: boolean; bytes: number } | null {
+  const key = id === 'auto' ? AUTO_SAVE_KEY : `${SAVE_KEY_PREFIX}${id}`;
+  const raw = safeGetItem(key);
   if (!raw) return null;
   try {
-    return parseAndMigrateSave(raw, slot);
+    const res = parseAndMigrateSave(raw, id === 'auto' ? 1 : id);
+    return { ...res, bytes: raw.length };
   } catch {
     return null;
   }
 }
 
-export function deleteSlotLocal(slot: 1 | 2 | 3): void {
+export function deleteSlotLocal(id: SaveSlotId): void {
   try {
     if (typeof localStorage !== 'undefined') {
-      localStorage.removeItem(`${SAVE_KEY_PREFIX}${slot}`);
+      const key = id === 'auto' ? AUTO_SAVE_KEY : `${SAVE_KEY_PREFIX}${id}`;
+      localStorage.removeItem(key);
     }
   } catch {
     // ignore
+  }
+}
+
+export function listSaveSlots(): SaveSlotSummary[] {
+  const ids: SaveSlotId[] = [1, 2, 3, 'auto'];
+  return ids.map((id) => {
+    const loaded = loadSlotLocal(id);
+    if (!loaded) {
+      return {
+        id,
+        exists: false,
+        bytes: 0,
+        level: 1,
+        genreId: 'platformer',
+        hp: 100,
+        coins: 0,
+        score: 0,
+        updatedAt: '',
+        checksumValid: true,
+        migrated: false,
+        data: null,
+      };
+    }
+    return {
+      id,
+      exists: true,
+      bytes: loaded.bytes,
+      level: loaded.data.level,
+      genreId: loaded.data.worldState?.genreId ?? 'platformer',
+      hp: loaded.data.hp,
+      coins: loaded.data.coins,
+      score: loaded.data.score,
+      updatedAt: loaded.data.updatedAt,
+      checksumValid: loaded.checksumValid,
+      migrated: loaded.migrated,
+      data: loaded.data,
+    };
+  });
+}
+
+export function getLatestSaveSlot(): SaveSlotSummary | null {
+  const existing = listSaveSlots().filter((s) => s.exists && s.data !== null);
+  if (existing.length === 0) return null;
+  existing.sort((a, b) => Date.parse(b.updatedAt || '0') - Date.parse(a.updatedAt || '0'));
+  return existing[0];
+}
+
+export function importSaveJsonToSlot(rawJson: string, targetSlot: SaveSlotId): {
+  ok: boolean;
+  summary?: SaveSlotSummary;
+  error?: string;
+} {
+  try {
+    if (rawJson.length > 32768) {
+      return { ok: false, error: 'Save file exceeds 32 KB mobile limit.' };
+    }
+    const parsed = parseAndMigrateSave(rawJson, targetSlot === 'auto' ? 1 : targetSlot);
+    saveSlotLocal(parsed.data, targetSlot);
+    const reloaded = loadSlotLocal(targetSlot);
+    if (!reloaded) return { ok: false, error: 'Failed to store imported save.' };
+    return {
+      ok: true,
+      summary: {
+        id: targetSlot,
+        exists: true,
+        bytes: reloaded.bytes,
+        level: reloaded.data.level,
+        genreId: reloaded.data.worldState?.genreId ?? 'platformer',
+        hp: reloaded.data.hp,
+        coins: reloaded.data.coins,
+        score: reloaded.data.score,
+        updatedAt: reloaded.data.updatedAt,
+        checksumValid: reloaded.checksumValid,
+        migrated: reloaded.migrated,
+        data: reloaded.data,
+      },
+    };
+  } catch {
+    return { ok: false, error: 'Invalid save JSON format.' };
   }
 }
 
@@ -307,71 +434,3 @@ export function loadTilemap(): number[][] {
 export function saveTilemap(map: number[][]): void {
   safeSetItem(TILEMAP_KEY, JSON.stringify(map));
 }
-
-export function loadEventRules(): EventSheetRule[] {
-  const raw = safeGetItem(EVENT_RULES_KEY);
-  if (!raw) return DEFAULT_EVENT_RULES;
-  try {
-    const parsed = JSON.parse(raw) as EventSheetRule[];
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      return parsed;
-    }
-  } catch {
-    // ignore
-  }
-  return DEFAULT_EVENT_RULES;
-}
-
-export function saveEventRules(rules: EventSheetRule[]): void {
-  safeSetItem(EVENT_RULES_KEY, JSON.stringify(rules));
-}
-
-export function loadWizardGames(): WizardGameSpec[] {
-  const raw = safeGetItem(MY_GAMES_KEY);
-  if (!raw) return STARTER_WIZARD_GAMES;
-  try {
-    const parsed = JSON.parse(raw) as WizardGameSpec[];
-    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-  } catch {
-    // ignore
-  }
-  return STARTER_WIZARD_GAMES;
-}
-
-export function saveWizardGames(games: WizardGameSpec[]): void {
-  safeSetItem(MY_GAMES_KEY, JSON.stringify(games));
-}
-
-export function loadSceneEntities(): SceneEntityNode[] {
-  const raw = safeGetItem(SCENE_ENTITIES_KEY);
-  if (!raw) return DEFAULT_SCENE_ENTITIES;
-  try {
-    const parsed = JSON.parse(raw) as SceneEntityNode[];
-    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-  } catch {
-    // ignore
-  }
-  return DEFAULT_SCENE_ENTITIES;
-}
-
-export function saveSceneEntities(entities: SceneEntityNode[]): void {
-  safeSetItem(SCENE_ENTITIES_KEY, JSON.stringify(entities));
-}
-
-export function loadCollisionShapes(): CollisionShapeSpec[] {
-  const raw = safeGetItem(COLLISION_SHAPES_KEY);
-  if (!raw) return DEFAULT_COLLISION_SHAPES;
-  try {
-    const parsed = JSON.parse(raw) as CollisionShapeSpec[];
-    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-  } catch {
-    // ignore
-  }
-  return DEFAULT_COLLISION_SHAPES;
-}
-
-export function saveCollisionShapes(shapes: CollisionShapeSpec[]): void {
-  safeSetItem(COLLISION_SHAPES_KEY, JSON.stringify(shapes));
-}
-
-

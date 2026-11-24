@@ -15,6 +15,8 @@ import type {
   LevelDefinition,
   PhysicsMode,
   RenderMode,
+  SaveSlotData,
+  SavedWorldProgress,
   WeatherKind,
 } from './types';
 
@@ -606,6 +608,94 @@ export function createLevelWorld(
   };
 }
 
+export function extractWorldSaveProgress(world: GameWorld): SavedWorldProgress {
+  const ws: SavedWorldProgress = {
+    genreId: world.genreId || 'platformer',
+    playerX: Number(world.player.x.toFixed(1)),
+    playerY: Number(world.player.y.toFixed(1)),
+    collectedShardIds: world.shards.filter((s) => s.collected).map((s) => s.id),
+    collectedCoinIds: world.coins.filter((c) => c.collected).map((c) => c.id),
+    activatedSwitchIds: world.switches.filter((s) => s.active).map((s) => s.id),
+    defeatedEnemyIds: world.enemies.filter((e) => e.dead).map((e) => e.id),
+  };
+  if (world.simKind === 'defense') ws.lanternHp = Math.round(world.lanternHp);
+  if (world.simKind === 'runner') ws.trackDist = Number(world.trackDist.toFixed(1));
+  if (world.simKind === 'visual_novel') ws.vnStep = world.vnStep;
+  if (world.time > 0) ws.elapsedSec = Number(world.time.toFixed(1));
+  return ws;
+}
+
+export function restoreWorldFromSave(save: SaveSlotData): GameWorld {
+  const ws = save.worldState;
+  const genreId = ws?.genreId || 'platformer';
+  const world = createLevelWorld(
+    save.level,
+    {
+      coinsTotal: save.coins,
+      score: save.score,
+      kills: save.kills,
+      potions: save.potions,
+      shardsTotal: save.shards,
+    },
+    genreId
+  );
+
+  world.player.hp = Math.max(1, Math.min(world.player.maxHp, save.hp));
+  world.player.energy = Math.max(0, Math.min(world.player.maxEnergy, save.energy));
+
+  if (ws) {
+    const def = LEVEL_DEFINITIONS[save.level];
+    world.player.x = Math.max(24, Math.min(def.width - 28, ws.playerX));
+    world.player.y = Math.max(24, Math.min(def.height - 24, ws.playerY));
+    world.cameraX = Math.max(0, Math.min(Math.max(0, def.width - 420), world.player.x - 160));
+    if (typeof ws.elapsedSec === 'number') world.time = ws.elapsedSec;
+    if (typeof ws.lanternHp === 'number') world.lanternHp = ws.lanternHp;
+    if (typeof ws.trackDist === 'number') world.trackDist = ws.trackDist;
+    if (typeof ws.vnStep === 'number' && world.simKind === 'visual_novel') {
+      world.vnStep = Math.max(0, Math.min(VN_SCENES.length, ws.vnStep));
+      if (world.vnStep >= VN_SCENES.length) {
+        world.vnChoices = [];
+        world.vnPrompt = 'Kisah cahaya tuntas! Gerbang Timur terbuka menuju kemenangan.';
+      } else {
+        world.vnPrompt = VN_SCENES[world.vnStep].prompt;
+        world.vnChoices = VN_SCENES[world.vnStep].choices;
+      }
+    }
+
+    const shardSet = new Set(ws.collectedShardIds);
+    const coinSet = new Set(ws.collectedCoinIds);
+    const switchSet = new Set(ws.activatedSwitchIds);
+    const enemySet = new Set(ws.defeatedEnemyIds);
+
+    for (const sh of world.shards) {
+      if (shardSet.has(sh.id)) sh.collected = true;
+    }
+    for (const co of world.coins) {
+      if (coinSet.has(co.id)) co.collected = true;
+    }
+    for (const sw of world.switches) {
+      if (switchSet.has(sw.id)) sw.active = true;
+    }
+    for (const en of world.enemies) {
+      if (enemySet.has(en.id)) {
+        en.dead = true;
+        en.hp = 0;
+      }
+    }
+
+    const shardsCollected = world.shards.filter((s) => s.collected).length;
+    const switchesActive = world.switches.filter((s) => s.active).length;
+    const bossDead = !def.hasBoss || world.enemies.every((e) => e.archetype !== 'boss_kala' || e.dead);
+    world.gateUnlocked =
+      shardsCollected >= def.requiredShards &&
+      switchesActive >= def.requiredSwitches &&
+      bossDead;
+  }
+
+  world.dialogue = `Progres Babak ${save.level} dimuat!`;
+  return world;
+}
+
 export function usePotion(world: GameWorld): boolean {
   if (world.potions <= 0 || world.player.hp >= world.player.maxHp || world.status !== 'playing') {
     return false;
@@ -632,7 +722,15 @@ export function getBossSummary(world: GameWorld): { hp: number; maxHp: number; p
 
 export function toHudSnapshot(
   world: GameWorld,
-  perf: { fps: number; resolutionScale: number; drawCalls: number; culledCount?: number; powerSaveActive: boolean }
+  perf: {
+    fps: number;
+    resolutionScale: number;
+    drawCalls: number;
+    culledCount?: number;
+    powerSaveActive: boolean;
+    aiMode?: 'off' | 'coop' | 'autopilot';
+    aiNote?: string;
+  }
 ): HudSnapshot {
   const def = LEVEL_DEFINITIONS[world.level];
   const boss = getBossSummary(world);
@@ -673,6 +771,8 @@ export function toHudSnapshot(
     speedKmh: world.simKind === 'runner' ? Math.round(world.speedKmh) : undefined,
     vnPrompt: world.simKind === 'visual_novel' ? world.vnPrompt : undefined,
     vnChoices: world.simKind === 'visual_novel' ? world.vnChoices.map((c) => c.label) : undefined,
+    aiMode: perf.aiMode,
+    aiNote: perf.aiNote,
   };
 }
 

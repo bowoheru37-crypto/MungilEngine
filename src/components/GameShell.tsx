@@ -26,24 +26,38 @@ import {
   type SimConfig,
   type SimInput,
 } from '../engine/gameSimulation';
+import { createAiCompanionState, stepAi15Hz } from '../engine/aiMcpAgent';
 import { LANGUAGE_NAMES, t } from '../engine/i18n';
 import { renderMode7Horizon, renderRaycastCorridor } from '../engine/pseudo3d';
+import { fastClampDt, isValidMove } from '../engine/qolbuCore';
+import { QolbuSpace3D } from '../engine/qolbuSpace3d';
+import { listSaveSlots } from '../engine/storage';
 import type {
+  AiCompanionState,
+  AiPlayMode,
   ArtStyleId,
+  Camera3DPresetId,
   CharacterAnimState,
   DeviceProfile,
   EventSheetRule,
   GameShellState,
   GeneratedCharacterSpec,
   HudSnapshot,
+  HybridRender5Mode,
   LanguageCode,
+  PerspectiveConnectorId,
   PhysicsMode,
   RenderMode,
+  SaveSlotId,
+  SaveSlotSummary,
   StyleOverrides,
   TouchControlConfig,
+  VisualQualityPresetId,
   WeatherKind,
 } from '../engine/types';
 import { PWAInstallButton } from './PWAInstallButton';
+
+const GAME_SPACE_3D = new QolbuSpace3D('follow_3_4', 16 / 9);
 
 interface GameShellProps {
   shellState: GameShellState;
@@ -59,6 +73,12 @@ interface GameShellProps {
   practiceMode: boolean;
   physicsDebug?: boolean;
   activeGenreId?: string;
+  aiMode?: AiPlayMode;
+  setAiMode?: (mode: AiPlayMode) => void;
+  perspectiveConnector?: PerspectiveConnectorId;
+  cameraPreset?: Camera3DPresetId;
+  hybridMode?: HybridRender5Mode;
+  visualQuality?: VisualQualityPresetId;
   speedMul: number;
   gravityMul: number;
   deviceProfile: DeviceProfile;
@@ -81,6 +101,11 @@ interface GameShellProps {
   onAutoSaveLocal?: () => void;
   onRecordAnalytics: (evt: { killsDelta: number; parriesDelta: number; clearedDelta: number; fps: number }) => void;
   worldRefExternal: React.MutableRefObject<GameWorld | null>;
+  latestSave?: SaveSlotSummary | null;
+  saveRevision?: number;
+  onSaveProgress?: (slotId: SaveSlotId) => { ok: boolean; bytes: number; level: 1 | 2 | 3 };
+  onLoadProgress?: (slotId: SaveSlotId, launchImmediately?: boolean) => { ok: boolean; level?: 1 | 2 | 3; score?: number };
+  onAutoSaveWorld?: () => void;
 }
 
 export function GameShell({
@@ -97,6 +122,12 @@ export function GameShell({
   practiceMode,
   physicsDebug = false,
   activeGenreId = 'platformer',
+  aiMode = 'off',
+  setAiMode,
+  perspectiveConnector = '2_5d_parallax',
+  cameraPreset = 'follow_3_4',
+  hybridMode = 'hybrid_2_5d_billboard',
+  visualQuality = 'mobile_eco',
   speedMul,
   gravityMul,
   deviceProfile,
@@ -119,8 +150,14 @@ export function GameShell({
   onAutoSaveLocal,
   onRecordAnalytics,
   worldRefExternal,
+  latestSave,
+  saveRevision = 0,
+  onSaveProgress,
+  onLoadProgress,
+  onAutoSaveWorld,
 }: GameShellProps) {
   const tr = t(lang);
+  const pauseStatusRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const joyKnobRef = useRef<HTMLDivElement | null>(null);
   const hpBarRef = useRef<HTMLDivElement | null>(null);
@@ -128,6 +165,7 @@ export function GameShell({
   const bossBarRef = useRef<HTMLDivElement | null>(null);
 
   const particlePoolRef = useRef<ParticlePool>(new ParticlePool());
+  const aiCompanionRef = useRef<AiCompanionState>(createAiCompanionState());
   const keysRef = useRef<Record<string, boolean>>({});
   const joyVecRef = useRef<{ x: number; y: number; active: boolean }>({ x: 0, y: 0, active: false });
   const pendingActionsRef = useRef<{ jump: boolean; jumpHeld: boolean; attack: boolean; dash: boolean; burst: boolean }>({
@@ -150,6 +188,11 @@ export function GameShell({
     practiceMode,
     physicsDebug,
     activeGenreId,
+    aiMode,
+    perspectiveConnector,
+    cameraPreset,
+    hybridMode,
+    visualQuality,
     speedMul,
     gravityMul,
     deviceProfile,
@@ -169,6 +212,11 @@ export function GameShell({
     practiceMode,
     physicsDebug,
     activeGenreId,
+    aiMode,
+    perspectiveConnector,
+    cameraPreset,
+    hybridMode,
+    visualQuality,
     speedMul,
     gravityMul,
     deviceProfile,
@@ -184,6 +232,7 @@ export function GameShell({
     onHudChange,
     onAutoSaveLocal,
     onRecordAnalytics,
+    onAutoSaveWorld,
   });
   callbacksRef.current = {
     setShellState,
@@ -191,6 +240,7 @@ export function GameShell({
     onHudChange,
     onAutoSaveLocal,
     onRecordAnalytics,
+    onAutoSaveWorld,
   };
 
   const triggerHaptic = useCallback((ms = 12) => {
@@ -424,8 +474,7 @@ export function GameShell({
       const fixedStep = cfg.deviceProfile.fixedStepSec;
 
       if (isActivePlay && world) {
-        let dt = frameMs / 1000;
-        if (dt > 0.05) dt = 0.05;
+        const dt = fastClampDt(frameMs / 1000);
         accumulator += dt;
         let steps = 0;
 
@@ -443,7 +492,7 @@ export function GameShell({
           const moveX = Math.max(-1, Math.min(1, keyX + joyX));
           const moveY = Math.max(-1, Math.min(1, keyY + joyY));
 
-          const input: SimInput = {
+          const manualInput: SimInput = {
             moveX,
             moveY,
             jumpPressed: pendingActionsRef.current.jump,
@@ -458,6 +507,17 @@ export function GameShell({
           pendingActionsRef.current.dash = false;
           pendingActionsRef.current.burst = false;
 
+          const aiStep = stepAi15Hz(world, aiCompanionRef.current, cfg.aiMode, fixedStep);
+          const hasManualOverride =
+            Math.abs(manualInput.moveX) > 0.1 ||
+            Math.abs(manualInput.moveY) > 0.1 ||
+            manualInput.jumpPressed ||
+            manualInput.attackPressed ||
+            manualInput.dashPressed ||
+            manualInput.burstPressed;
+          const input: SimInput =
+            aiStep.inputOverride && !hasManualOverride ? aiStep.inputOverride : manualInput;
+
           const simCfg: SimConfig = {
             physicsMode: cfg.physicsMode,
             renderMode: cfg.renderMode,
@@ -469,7 +529,13 @@ export function GameShell({
             eventRules: cfg.eventRules,
           };
 
+          const prevPx = world.player.x;
+          const prevPy = world.player.y;
           const events = stepGameWorld(world, input, fixedStep, simCfg, 620);
+          if (!isValidMove(prevPx, prevPy, world.player.x, world.player.y, fixedStep, 600)) {
+            world.player.x = prevPx;
+            world.player.y = prevPy;
+          }
           particlePoolRef.current.step(fixedStep);
 
           for (const ev of events) {
@@ -507,12 +573,14 @@ export function GameShell({
               callbacksRef.current.onRecordAnalytics({ killsDelta: 0, parriesDelta: 0, clearedDelta: 1, fps: Math.round(1000 / emaFrameMs) });
               callbacksRef.current.onAutoSaveLocal?.();
               initOrResetLevel(nextLvl, true);
+              callbacksRef.current.onAutoSaveWorld?.();
               soundEngine.startTracker(nextLvl);
               break;
             } else if (ev.type === 'victory') {
               soundEngine.stopTracker();
               callbacksRef.current.onAutoSaveLocal?.();
               callbacksRef.current.onRecordAnalytics({ killsDelta: 0, parriesDelta: 0, clearedDelta: 1, fps: Math.round(1000 / emaFrameMs) });
+              callbacksRef.current.onAutoSaveWorld?.();
               callbacksRef.current.setShellState('victory');
             } else if (ev.type === 'gameover') {
               soundEngine.stopTracker();
@@ -555,6 +623,12 @@ export function GameShell({
         powerSaveActive,
         timeFallback: titleIdleTime,
         customCharacter: cfg.customCharacter,
+        aiCompanion: aiCompanionRef.current,
+        aiMode: cfg.aiMode,
+        perspectiveConnector: cfg.perspectiveConnector,
+        cameraPreset: cfg.cameraPreset,
+        hybridMode: cfg.hybridMode,
+        visualQuality: cfg.visualQuality,
       });
 
       // Throttled HUD text snapshot sync (~6Hz) only while playing
@@ -570,6 +644,8 @@ export function GameShell({
               drawCalls,
               culledCount,
               powerSaveActive,
+              aiMode: cfg.aiMode,
+              aiNote: aiCompanionRef.current.active ? aiCompanionRef.current.actionLabel : undefined,
             })
           );
         }
@@ -711,7 +787,7 @@ export function GameShell({
             </p>
 
             {/* Level Quick Picker */}
-            <div className="mb-4 grid w-full max-w-sm grid-cols-3 gap-2">
+            <div className="mb-3 grid w-full max-w-sm grid-cols-3 gap-2">
               {([1, 2, 3] as const).map((lvl) => (
                 <button
                   key={lvl}
@@ -727,6 +803,35 @@ export function GameShell({
                 </button>
               ))}
             </div>
+
+            {/* Compact AI Play Mode Switcher (Solo / With AI / AI Plays) */}
+            {setAiMode && (
+              <div className="mb-4 grid w-full max-w-sm grid-cols-3 gap-2">
+                {(
+                  [
+                    { id: 'off', label: 'Solo' },
+                    { id: 'coop', label: 'With AI' },
+                    { id: 'autopilot', label: 'AI Plays' },
+                  ] as const
+                ).map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => {
+                      soundEngine.playSfx('ui_toggle');
+                      setAiMode(m.id);
+                    }}
+                    className={`touch-btn rounded-xl border px-2 py-1.5 text-[11px] font-bold transition ${
+                      aiMode === m.id
+                        ? 'border-sky-400 bg-sky-500 text-slate-950 shadow'
+                        : 'border-white/15 bg-slate-900/80 text-slate-200 hover:bg-slate-800'
+                    }`}
+                  >
+                    {m.label}
+                  </button>
+                ))}
+              </div>
+            )}
 
             <div className="flex w-full max-w-sm flex-col gap-2.5 sm:flex-row">
               <button
@@ -747,6 +852,22 @@ export function GameShell({
                 <span>{tr.openStudio}</span>
               </button>
             </div>
+
+            {latestSave?.exists && onLoadProgress && (
+              <button
+                type="button"
+                onClick={() => {
+                  soundEngine.playSfx('ui_click');
+                  onLoadProgress(latestSave.id, true);
+                }}
+                className="touch-btn mt-2.5 flex w-full max-w-sm items-center justify-between gap-2 rounded-xl border border-emerald-400/50 bg-emerald-500/15 px-3.5 py-2.5 text-left text-xs font-bold text-emerald-200 transition hover:bg-emerald-500/25"
+              >
+                <span>{tr.continueSaved}</span>
+                <span className="font-mono-num text-[11px] text-white">
+                  {tr.levelLabel} {latestSave.level} · {latestSave.score} pts
+                </span>
+              </button>
+            )}
 
             <div className="mt-3 flex flex-wrap items-center justify-center gap-2">
               {onBackToLanding && (
@@ -853,6 +974,11 @@ export function GameShell({
               {physicsDebug && (
                 <div className="font-mono-num mt-1 text-[9px] font-bold text-cyan-300 sm:text-[10px]">
                   DBG {physicsMode} · Calls {hud.drawCalls} · Culled {hud.culledCount ?? 0}
+                </div>
+              )}
+              {aiMode !== 'off' && (
+                <div data-testid="ai-hud-badge" className="font-mono-num mt-1 text-[9px] font-bold text-emerald-300 sm:text-[10px]">
+                  {aiMode === 'autopilot' ? 'AI PILOT' : 'LUMA CO-OP'} · {hud.aiNote ?? '15Hz Active'}
                 </div>
               )}
             </div>
@@ -1097,17 +1223,112 @@ export function GameShell({
 
             <div className="mt-5 flex flex-col gap-2.5">
               {shellState === 'paused' && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShellState('playing');
-                    soundEngine.startTracker(activeLevel);
-                  }}
-                  className="touch-btn flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-extrabold text-slate-950 hover:bg-emerald-400"
-                >
-                  <Play className="h-4 w-4 fill-current" />
-                  <span>{tr.resumeGame}</span>
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShellState('playing');
+                      soundEngine.startTracker(activeLevel);
+                    }}
+                    className="touch-btn flex items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-sm font-extrabold text-slate-950 hover:bg-emerald-400"
+                  >
+                    <Play className="h-4 w-4 fill-current" />
+                    <span>{tr.resumeGame}</span>
+                  </button>
+
+                  {setAiMode && (
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {(
+                        [
+                          { id: 'off', label: 'Solo' },
+                          { id: 'coop', label: 'With AI' },
+                          { id: 'autopilot', label: 'AI Plays' },
+                        ] as const
+                      ).map((m) => (
+                        <button
+                          key={m.id}
+                          type="button"
+                          onClick={() => {
+                            soundEngine.playSfx('ui_toggle');
+                            setAiMode(m.id);
+                          }}
+                          className={`touch-btn rounded-lg border px-2 py-1.5 text-[11px] font-bold ${
+                            aiMode === m.id
+                              ? 'border-sky-400 bg-sky-500 text-slate-950'
+                              : 'border-white/15 bg-slate-800 text-slate-200'
+                          }`}
+                        >
+                          {m.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+
+                  {onSaveProgress && onLoadProgress && (() => {
+                    void saveRevision;
+                    const slotRows = listSaveSlots();
+                    return (
+                      <div className="rounded-xl border border-white/10 bg-slate-950/70 p-2.5 text-left">
+                        <div className="mb-1.5 flex items-center justify-between text-[11px] font-bold text-slate-300">
+                          <span>{tr.quickSaveLabel}</span>
+                          <span className="font-mono-num text-[10px] text-slate-400">FNV-1a &lt;1 KB</span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-1.5">
+                          {([1, 2, 3] as const).map((s) => {
+                            const info = slotRows.find((r) => r.id === s);
+                            return (
+                              <div key={s} className="flex flex-col gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    const res = onSaveProgress(s);
+                                    soundEngine.playSfx('ui_click');
+                                    if (pauseStatusRef.current) {
+                                      pauseStatusRef.current.textContent = res.ok
+                                        ? `${tr.savedNotice} ${tr.slotLabel} ${s} · ${res.bytes} B`
+                                        : 'Storage full';
+                                    }
+                                  }}
+                                  className="touch-btn rounded-lg bg-sky-500/20 px-2 py-1.5 text-[11px] font-bold text-sky-200 hover:bg-sky-500/35"
+                                >
+                                  {tr.saveProgress} {s}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={!info?.exists}
+                                  onClick={() => {
+                                    const res = onLoadProgress(s, true);
+                                    soundEngine.playSfx('ui_click');
+                                    if (!res.ok && pauseStatusRef.current) {
+                                      pauseStatusRef.current.textContent = `${tr.slotLabel} ${s} ${tr.emptySlotLabel}`;
+                                    }
+                                  }}
+                                  className="touch-btn rounded-lg border border-white/15 bg-slate-800/80 px-2 py-1.5 text-[11px] font-semibold text-slate-200 disabled:opacity-40"
+                                >
+                                  {info?.exists ? `${tr.loadProgress} L${info.level}` : tr.emptySlotLabel}
+                                </button>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {slotRows.find((r) => r.id === 'auto')?.exists && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              soundEngine.playSfx('ui_click');
+                              onLoadProgress('auto', true);
+                            }}
+                            className="touch-btn mt-1.5 w-full rounded-lg border border-emerald-400/35 bg-emerald-500/15 px-2.5 py-1.5 text-[11px] font-bold text-emerald-200 hover:bg-emerald-500/25"
+                          >
+                            {tr.loadProgress} {tr.autoSaveLabel} (L{slotRows.find((r) => r.id === 'auto')?.level} ·{' '}
+                            {slotRows.find((r) => r.id === 'auto')?.score} pts)
+                          </button>
+                        )}
+                        <div ref={pauseStatusRef} className="mt-1.5 text-center text-[11px] font-semibold text-emerald-300" />
+                      </div>
+                    );
+                  })()}
+                </>
               )}
 
               <button
@@ -1168,6 +1389,12 @@ function renderGameScene(
     powerSaveActive: boolean;
     timeFallback: number;
     customCharacter?: GeneratedCharacterSpec | null;
+    aiCompanion?: AiCompanionState;
+    aiMode?: AiPlayMode;
+    perspectiveConnector?: PerspectiveConnectorId;
+    cameraPreset?: Camera3DPresetId;
+    hybridMode?: HybridRender5Mode;
+    visualQuality?: VisualQualityPresetId;
   }
 ): { drawCalls: number; culledCount: number } {
   let drawCalls = 0;
@@ -1177,6 +1404,12 @@ function renderGameScene(
   const sim = world.simKind;
   const isFree2D = sim === 'topdown' || sim === 'shooter';
 
+  // Zero-GC QolbuSpace3D sync (1 unit = 1 meter -> 40px = 1m)
+  GAME_SPACE_3D.camera.preset = opts.cameraPreset ?? 'follow_3_4';
+  GAME_SPACE_3D.setEntity(0, world.player.x / 40, (def.groundY - world.player.y) / 40, 0);
+  GAME_SPACE_3D.rebaseIfNeeded(world.player.x / 40, 0);
+  GAME_SPACE_3D.updateAll(cw, ch);
+
   // On portrait mobile, fit >= 370 world units horizontally and align ground near bottom so players see enemies & platforms ahead
   const isPortrait = cw < ch;
   const scale = isPortrait ? Math.min(ch / def.height, cw / 370) : ch / def.height;
@@ -1185,7 +1418,7 @@ function renderGameScene(
   const tNow = world.time > 0 ? world.time : opts.timeFallback;
 
   // Sky / Cosmos / Top-Down Backdrop
-  if (style.id === 'raycast' && sim !== 'topdown' && sim !== 'shooter') {
+  if ((style.id === 'raycast' || opts.hybridMode === 'raycast_pseudo3d') && sim !== 'topdown' && sim !== 'shooter') {
     drawCalls += renderRaycastCorridor(ctx, cw, ch, world.cameraX, style);
   } else {
     const skyGrad = ctx.createLinearGradient(0, 0, 0, ch);
@@ -1250,7 +1483,7 @@ function renderGameScene(
     ctx.fill();
     drawCalls += 1;
 
-    if (opts.renderMode === '2.5D' || opts.renderMode === '3D Ringan') {
+    if (opts.renderMode === '2.5D' || opts.renderMode === '3D Ringan' || opts.hybridMode === 'mode7_voxel') {
       drawCalls += renderMode7Horizon(ctx, viewW, def.groundY - 26, def.groundY, camX, style, world.level);
     }
   }
@@ -1260,18 +1493,29 @@ function renderGameScene(
   ctx.translate(-camX, 0);
 
   if (sim === 'topdown') {
-    // Top-Down Dungeon / Sanctuary Floor Grid (drawn strictly across visible viewport columns)
+    // Top-Down Dungeon / Sanctuary Floor Grid (covers full visible viewport height on portrait mobile too)
     const tile = 48;
     const startCol = Math.max(0, Math.floor(camX / tile));
     const endCol = Math.min(Math.ceil(def.width / tile), Math.ceil((camX + viewW) / tile));
+    const maxRow = Math.max(9, Math.ceil(ch / scale / tile));
     ctx.strokeStyle = 'rgba(255,255,255,0.06)';
     ctx.lineWidth = 1;
     for (let c = startCol; c <= endCol; c++) {
-      for (let r = 1; r < 9; r++) {
-        ctx.fillStyle = (c + r) % 2 === 0 ? 'rgba(255,255,255,0.03)' : 'rgba(0,0,0,0.08)';
+      for (let r = 0; r <= maxRow; r++) {
+        const inArena = r >= 1 && r < 9;
+        ctx.fillStyle = inArena
+          ? (c + r) % 2 === 0
+            ? 'rgba(255,255,255,0.035)'
+            : 'rgba(0,0,0,0.09)'
+          : (c + r) % 2 === 0
+            ? 'rgba(255,255,255,0.014)'
+            : 'rgba(0,0,0,0.16)';
         ctx.fillRect(c * tile, r * tile, tile - 1, tile - 1);
       }
     }
+    ctx.strokeStyle = 'rgba(56,189,248,0.18)';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(0, tile, def.width, tile * 8);
     drawCalls += 1;
 
     // Solid Dungeon Stone Pillars (culled)
@@ -1606,6 +1850,75 @@ function renderGameScene(
     drawCalls += 1;
   }
 
+  // Luma AI Companion / Autopilot Drone Sprite (15Hz Co-Op & Auto-Play)
+  if (opts.aiCompanion?.active && opts.aiMode !== 'off') {
+    const lx = opts.aiCompanion.x;
+    const ly = opts.aiCompanion.y;
+    ctx.fillStyle = opts.aiMode === 'autopilot' ? 'rgba(168,85,247,0.28)' : 'rgba(56,189,248,0.28)';
+    ctx.beginPath();
+    ctx.arc(lx, ly, 15, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = opts.aiMode === 'autopilot' ? '#c084fc' : '#38bdf8';
+    ctx.beginPath();
+    ctx.arc(lx, ly, 8.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    ctx.font = 'bold 9px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#e0f2fe';
+    ctx.fillText(opts.aiMode === 'autopilot' ? 'AI PILOT' : 'LUMA AI', lx, ly - 14);
+    drawCalls += 1;
+  }
+
+  // Perspective Connector Visual Guides (Isometric / Hexagonal / FPS Reticle)
+  if (opts.perspectiveConnector === 'isometric') {
+    ctx.strokeStyle = 'rgba(56,189,248,0.16)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    const gStart = Math.floor(camX / 64) * 64;
+    for (let gx = gStart; gx < camX + viewW + 96; gx += 64) {
+      ctx.moveTo(gx, def.groundY);
+      ctx.lineTo(gx + 48, def.groundY + 24);
+      ctx.moveTo(gx + 48, def.groundY);
+      ctx.lineTo(gx, def.groundY + 24);
+    }
+    ctx.stroke();
+    drawCalls += 1;
+  } else if (opts.perspectiveConnector === 'hexagonal') {
+    ctx.strokeStyle = 'rgba(74,222,128,0.22)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    const hexStart = Math.floor(camX / 54) * 54 + 27;
+    for (let hx = hexStart; hx < camX + viewW + 30; hx += 54) {
+      const hy = def.groundY + 14;
+      for (let k = 0; k < 6; k++) {
+        const a = (Math.PI / 3) * k;
+        const px = hx + 16 * Math.cos(a);
+        const py = hy + 9 * Math.sin(a);
+        if (k === 0) ctx.moveTo(px, py);
+        else ctx.lineTo(px, py);
+      }
+      ctx.closePath();
+    }
+    ctx.stroke();
+    drawCalls += 1;
+  } else if (opts.perspectiveConnector === 'first_person') {
+    const cx = camX + viewW * 0.5;
+    const cy = def.height * 0.44;
+    ctx.strokeStyle = 'rgba(56,189,248,0.55)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(cx, cy, 12, 0, Math.PI * 2);
+    ctx.moveTo(cx - 18, cy);
+    ctx.lineTo(cx - 6, cy);
+    ctx.moveTo(cx + 6, cy);
+    ctx.lineTo(cx + 18, cy);
+    ctx.stroke();
+    drawCalls += 1;
+  }
+
   // Pooled Particles (Culled via isPointInViewport)
   for (let i = 0; i < particles.capacity; i++) {
     if (particles.active[i] === 0) continue;
@@ -1740,7 +2053,7 @@ function renderGameScene(
             : pl.grounded
               ? 'GND'
               : 'AIR';
-    const dbgText = `${opts.physicsMode} G=${effectiveGravity} ${modeTag} Culled=${culledCount}`;
+    const dbgText = `${opts.physicsMode} G=${effectiveGravity} ${modeTag} ${opts.cameraPreset ?? 'follow_3_4'} Culled=${culledCount}`;
     const dbgX = Math.max(camX + 96, Math.min(camX + viewW - 96, pl.x));
     const dbgY = Math.max(22, pl.y - pl.h * 0.5 - 10);
     ctx.font = 'bold 10px monospace';

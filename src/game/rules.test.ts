@@ -12,21 +12,15 @@ import {
   runBytecodeVm,
   unpackRleBytes,
 } from '../engine/bytecode.ts';
-import { KEYWORD_TOP5_REPOS } from '../engine/catalogs.ts';
+import { KEYWORD_TOP5_REPOS, GENERATOR_TOP3_REPOS } from '../engine/catalogs.ts';
 import { isCircleInViewport, isPointInViewport, isRectInViewport } from '../engine/culling.ts';
 import { createDeviceProfile, updateDynamicResolution } from '../engine/deviceProfiler.ts';
 import { ParticlePool, SoAWorld } from '../engine/ecs.ts';
 import {
-  createBoneSpringState,
-  ENGINE_LAYERS,
-  evaluateCharacterFsm,
-  evaluateHardenedRules,
-  stepBonePoseSpring,
-  validateMoveBounds,
-} from '../engine/engineCore.ts';
-import {
   createLevelWorld,
+  extractWorldSaveProgress,
   LEVEL_DEFINITIONS,
+  restoreWorldFromSave,
   selectVisualNovelChoice,
   stepGameWorld,
   usePotion,
@@ -34,34 +28,66 @@ import {
   type SimInput,
 } from '../engine/gameSimulation.ts';
 import {
+  composeMovieFromPrompt,
   generateCharacter,
+  generateCompleteGameBlueprint,
   generateCutsceneSpec,
+  generateDubbingSubtitleSpec,
+  generateGameplaySceneAndRules,
+  generateImageSpriteFromPrompt,
+  generateMesh3DFromPrompt,
   generateMusicTrack,
+  generatePlatformTargetSpec,
   generatePropAsset,
+  generateRig3DFromPrompt,
   generateSfxSpec,
+  generateStateMachineSpec,
   generateTerrainSpec,
+  parseAtelierSetupJson,
 } from '../engine/generators.ts';
-import { I18N_MAP } from '../engine/i18n.ts';
+import {
+  CURATED_GITHUB_PLUGINS,
+  filterCuratedGitHubPlugins,
+  searchGitHubReposWithFallback,
+} from '../engine/githubConnectors.ts';
+import {
+  calcFogFactor,
+  CAMERA_3_PRESETS,
+  createCamera3D,
+  evaluateCullAndLod,
+  evaluateOriginRebase,
+  HYBRID_5_MODES,
+  QolbuSpace3D,
+  SPACE3D_CONSTANTS,
+  updateCameraModeAIsometric,
+  updateCameraModeBFollow34,
+  updateCameraModeCFpsRaycast,
+} from '../engine/qolbuSpace3d.ts';
+import {
+  createAiCompanionState,
+  executeMcpTool,
+  routeAgentPrompt,
+  stepAi15Hz,
+} from '../engine/aiMcpAgent.ts';
 import { project3D } from '../engine/pseudo3d.ts';
 import {
-  askQolbuAgent,
-  buildWizardGameSpec,
-  LOCAL_MCP_TOOLS,
-  QOLBU_ENGINE_TOPICS,
-  TUTORIAL_STEPS,
-} from '../engine/qolbuAgent.ts';
+  DoubleBufferedTransforms,
+  ENGINE_CONNECTORS,
+  fastClampDt,
+  isValidMove,
+  QOLBU_CONSTANTS,
+  runQolbu8StageAudit,
+} from '../engine/qolbuCore.ts';
 import {
-  computeWorldTransform,
-  createArenaWorld,
-  DEFAULT_COLLISION_SHAPES,
-  DEFAULT_SCENE_ENTITIES,
-  evaluateShapeOverlaps,
-  groupEntities,
+  applyPhysicsPreset,
+  createDefaultSceneEntities,
+  detectEntityOverlaps,
+  groupEntitiesIntoContainer,
   PHYSICS_PRESETS,
-  stepArenaWorld,
-  triggerArenaPlayerAction,
   ungroupContainer,
-} from '../engine/scenePhysics.ts';
+  updateEntityCollider,
+  updateEntityTransform,
+} from '../engine/sceneHierarchy.ts';
 import { buildSavePayload, parseAndMigrateSave } from '../engine/storage.ts';
 
 const IDLE_INPUT: SimInput = {
@@ -416,161 +442,356 @@ test('Genre templates simulate authentically across Top-Down, Bullet Hell, Runne
   assert.ok(mv.player.vy < -200);
 });
 
-test('FD Lite v2 FSM table, 2-bone damped cloak spring, and Qolbu validateMoveBounds security guard', () => {
-  assert.equal(
-    evaluateCharacterFsm('idle', { ko: true, hurt: true, dashing: true, attacking: true, grounded: true, vy: 0, vx: 0 }),
-    'ko'
-  );
-  assert.equal(
-    evaluateCharacterFsm('idle', { ko: false, hurt: false, dashing: true, attacking: false, grounded: false, vy: 100, vx: 200 }),
-    'dash'
-  );
-  assert.equal(
-    evaluateCharacterFsm('idle', { ko: false, hurt: false, dashing: false, attacking: false, grounded: true, vy: 0, vx: 80 }),
-    'walk'
-  );
+test('Full-world Save/Load roundtrip preserves stats, position, collected items, switches, defeated enemies, and stays compact (< 2 KB)', () => {
+  const world = createLevelWorld(2, undefined, 'rpg');
+  world.player.hp = 74;
+  world.player.energy = 42;
+  world.player.x = 512.5;
+  world.player.y = 210.5;
+  world.score = 1350;
+  world.coinsTotal = 45;
+  world.kills = 2;
+  world.potions = 1;
+  world.time = 37.4;
 
-  const spring = createBoneSpringState();
-  for (let i = 0; i < 15; i++) {
-    stepBonePoseSpring(spring, 'walk', 200, -40, 1 / 30);
-  }
-  assert.ok(Number.isFinite(spring.cloakOffsetX) && Math.abs(spring.cloakOffsetX) <= 16);
-  assert.ok(Number.isFinite(spring.cloakOffsetY) && Math.abs(spring.cloakOffsetY) <= 12);
+  // Collect all 3 shards + 2 coins, activate both switches, defeat 2 enemies
+  for (const s of world.shards) s.collected = true;
+  world.shardsTotal = 3;
+  world.coins[0].collected = true;
+  world.coins[1].collected = true;
+  for (const sw of world.switches) sw.active = true;
+  world.enemies[0].dead = true;
+  world.enemies[1].dead = true;
 
-  // NaN exploit rejected cleanly
-  const nanRes = validateMoveBounds(100, 200, Number.NaN, 200, 1 / 30, 400, { minX: 16, maxX: 1100, minY: 20, maxY: 460 });
-  assert.equal(nanRes.valid, false);
-  assert.equal(nanRes.reason, 'nan');
-  assert.equal(nanRes.x, 100);
-
-  // Speed hack teleport clamped cleanly
-  const spdRes = validateMoveBounds(100, 200, 9999, 200, 1 / 30, 400, { minX: 16, maxX: 1100, minY: 20, maxY: 460 });
-  assert.equal(spdRes.valid, false);
-  assert.equal(spdRes.reason, 'speed');
-  assert.ok(spdRes.x < 200);
-});
-
-test('Live No-Code EventSheetRules, 15Hz Eco AI decimation, 7-Layer Engine & Offline Toast i18n work end-to-end', () => {
-  const world = createLevelWorld(1);
-  world.player.hp = 20;
-  const rules = [
-    { id: 'r1', enabled: true, condition: 'ON_SHARD_COLLECT' as const, action: 'ADD_SCORE_25' as const },
-    { id: 'r2', enabled: true, condition: 'ON_LOW_HP' as const, action: 'HEAL_15' as const },
-  ];
-  // Put player on shard 1 with low HP and Eco 15Hz AI enabled
-  world.player.x = world.shards[0].x;
-  world.player.y = world.shards[0].y;
-  stepGameWorld(world, IDLE_INPUT, 1 / 30, { ...DEFAULT_CFG, ecoAi15Hz: true, eventRules: rules });
-
-  // Shard gives +250, rule adds +25 => >= 275; ON_LOW_HP rule heals +15 => 35 HP
-  assert.ok(world.score >= 275);
-  assert.equal(world.player.hp, 35);
-  assert.equal(world.simStepTick, 1);
-
-  const eco = createDeviceProfile('eco', true);
-  const hardened = evaluateHardenedRules(eco, {
-    simMs: 2.0,
-    renderMs: 6.0,
-    frameMs: 18.0,
-    drawCalls: 14,
-    culledCount: 8,
-    heapMb: 18,
-    aiHz: 15,
+  const worldState = extractWorldSaveProgress(world);
+  const payload = buildSavePayload(2, {
+    gameTitle: 'Bowo: Penjaga Cahaya',
+    level: 2,
+    hp: world.player.hp,
+    energy: world.player.energy,
+    coins: world.coinsTotal,
+    shards: world.shardsTotal,
+    score: world.score,
+    kills: world.kills,
+    potions: world.potions,
+    styleId: 'cyberpunk',
+    worldState,
   });
-  assert.equal(hardened.length, 9);
-  assert.ok(hardened.every((r) => r.status === 'pass'));
-  assert.equal(ENGINE_LAYERS.length, 7);
 
-  for (const langCode of ['id', 'en', 'ja', 'ko', 'es'] as const) {
-    assert.equal(I18N_MAP[langCode].offlineToastTitle, 'Offline Mode');
-    assert.ok(I18N_MAP[langCode].offlineToastBody.length > 10);
+  const serialized = JSON.stringify(payload);
+  assert.ok(serialized.length < 2048, `Expected compact mobile save < 2048 bytes, got ${serialized.length}`);
+
+  const parsed = parseAndMigrateSave(serialized, 2);
+  assert.equal(parsed.checksumValid, true);
+  assert.equal(parsed.migrated, false);
+
+  const restored = restoreWorldFromSave(parsed.data);
+  assert.equal(restored.level, 2);
+  assert.equal(restored.genreId, 'rpg');
+  assert.equal(restored.simKind, 'topdown');
+  assert.equal(restored.player.hp, 74);
+  assert.equal(restored.player.energy, 42);
+  assert.equal(restored.player.x, 512.5);
+  assert.equal(restored.player.y, 210.5);
+  assert.equal(restored.score, 1350);
+  assert.equal(restored.coinsTotal, 45);
+  assert.equal(restored.kills, 2);
+  assert.equal(restored.potions, 1);
+  assert.equal(restored.shards.every((s) => s.collected), true);
+  assert.equal(restored.coins[0].collected, true);
+  assert.equal(restored.coins[1].collected, true);
+  assert.equal(restored.coins[2].collected, false);
+  assert.equal(restored.switches.every((sw) => sw.active), true);
+  assert.equal(restored.enemies[0].dead, true);
+  assert.equal(restored.enemies[1].dead, true);
+  assert.equal(restored.enemies[2].dead, false);
+  assert.equal(restored.gateUnlocked, true);
+
+  // Tamper test: modify HP out of bounds -> checksumValid false & clamped
+  const tamperedObj = JSON.parse(serialized);
+  tamperedObj.hp = 9999;
+  const tamperedRes = parseAndMigrateSave(JSON.stringify(tamperedObj), 2);
+  assert.equal(tamperedRes.checksumValid, false);
+  assert.equal(tamperedRes.data.hp, 100);
+});
+
+test('Expanded Atelier, Image-Sprite, MovieCore, FSM, Gameplay Bundle, Dubbing/Subtitles, Targets & Top-3 Matrix work cleanly', () => {
+  const sprite1 = generateImageSpriteFromPrompt(101, 'Cyber Neon Lantern', 'cyberpunk');
+  const sprite2 = generateImageSpriteFromPrompt(101, 'Cyber Neon Lantern', 'cyberpunk');
+  assert.deepEqual(sprite1, sprite2);
+  assert.equal(sprite1.size, 16);
+  assert.equal(sprite1.grid.length, 16);
+
+  const rig = generateRig3DFromPrompt(202, 'Ksatria Cahaya', 'cobalt_knight');
+  assert.equal(rig.character.archetype, 'Knight');
+  assert.equal(rig.atelier.tint, '#b9c8ff');
+
+  const atelierOk = parseAtelierSetupJson(
+    JSON.stringify({ app: 'CharacterAtelier', settings: { tint: '#b3ffe0', sy: 1.1, bones: { bone_2: [0, 0, 5] } } })
+  );
+  assert.equal(atelierOk.ok, true);
+  assert.equal(atelierOk.character?.cloakColor, '#b3ffe0');
+  assert.equal(parseAtelierSetupJson('{bad json').ok, false);
+
+  const movie = composeMovieFromPrompt('jalan lompat dash serang burst', 55, 'Hujan');
+  assert.equal(movie.keyframes.length, 5);
+  assert.equal(movie.keyframes[1].pose, 'jump');
+  assert.equal(movie.keyframes[3].effect, 'shake');
+
+  const moveFsm = generateStateMachineSpec(11, 'movement');
+  assert.equal(moveFsm.kind, 'movement');
+  assert.ok(moveFsm.states.length >= 5);
+  assert.ok(moveFsm.transitions.length >= 4);
+
+  const aiFsm = generateStateMachineSpec(11, 'behavior');
+  assert.equal(aiFsm.kind, 'behavior');
+  assert.equal(aiFsm.initialState, 'patrol');
+
+  const bundle = generateGameplaySceneAndRules(33, 'Space shooter arcade nebula');
+  assert.equal(bundle.genreId, 'shooter');
+  assert.equal(bundle.physicsMode, 'Zero-G');
+  assert.ok(bundle.rules.length >= 3);
+
+  const dub = generateDubbingSubtitleSpec(77, 'Bowo', 'Nyalakan Lentera Cahaya sekarang!', 'id');
+  assert.ok(dub.srtText.includes('-->'));
+  assert.ok(dub.vttText.startsWith('WEBVTT'));
+  assert.ok(dub.durationSec >= 1.6);
+
+  const apk = generatePlatformTargetSpec(1, 'apk', 'Bowo V7');
+  assert.ok(apk.configJson.includes('itelA70Profile'));
+  const mcp = generatePlatformTargetSpec(1, 'mcp', 'Bowo V7');
+  assert.ok(mcp.configJson.includes('mungil.create_level'));
+
+  assert.equal(GENERATOR_TOP3_REPOS.length, 5);
+  for (const grp of GENERATOR_TOP3_REPOS) {
+    assert.equal(grp.repos.length, 3);
   }
 });
 
-test('Physics Presets, Group Entities (keep-world), Ungroup, and Collision Shape overlap detection work accurately', () => {
-  assert.deepEqual(Object.keys(PHYSICS_PRESETS), ['NORMAL', 'BOUNCY', 'HEAVY', 'GHOST', 'SLIPPERY', 'BALL']);
-  assert.equal(PHYSICS_PRESETS.GHOST.isTrigger, true);
-  assert.equal(PHYSICS_PRESETS.BOUNCY.restitution > PHYSICS_PRESETS.HEAVY.restitution, true);
+test('Scene Hierarchy groups entities into Container, propagates move/scale/rotate, applies Physics Presets, and detects box/circle overlaps', () => {
+  let entities = createDefaultSceneEntities(1);
+  const bowoBefore = entities.find((e) => e.id === 'ent_bowo')!;
+  const enemyBefore = entities.find((e) => e.id === 'ent_enemy_1')!;
+  assert.ok(bowoBefore && enemyBefore);
 
-  const bowoBefore = computeWorldTransform(DEFAULT_SCENE_ENTITIES[0], DEFAULT_SCENE_ENTITIES);
-  const grouped = groupEntities(DEFAULT_SCENE_ENTITIES, ['ent_bowo', 'ent_qolbu'], 'Duo Cahaya');
+  // 1. Group two entities into a parent Container
+  const grouped = groupEntitiesIntoContainer(entities, ['ent_bowo', 'ent_enemy_1'], 'Squad Alpha');
   assert.ok(grouped.containerId);
-  const bowoGroupedNode = grouped.nodes.find((n) => n.id === 'ent_bowo')!;
-  const bowoAfter = computeWorldTransform(bowoGroupedNode, grouped.nodes);
-  assert.ok(Math.abs(bowoBefore.x - bowoAfter.x) < 0.05);
-  assert.ok(Math.abs(bowoBefore.y - bowoAfter.y) < 0.05);
+  entities = grouped.entities;
 
-  const movedNodes = grouped.nodes.map((n) => (n.id === grouped.containerId ? { ...n, x: n.x + 25 } : n));
-  const bowoMoved = computeWorldTransform(movedNodes.find((n) => n.id === 'ent_bowo')!, movedNodes);
-  assert.ok(Math.abs(bowoMoved.x - (bowoBefore.x + 25)) < 0.05);
+  const container = entities.find((e) => e.id === grouped.containerId)!;
+  assert.equal(container.kind, 'container');
+  assert.deepEqual(container.children, ['ent_bowo', 'ent_enemy_1']);
 
-  const ungrouped = ungroupContainer(movedNodes, grouped.containerId!);
-  assert.equal(ungrouped.some((n) => n.id === grouped.containerId), false);
-  const bowoUngrouped = computeWorldTransform(ungrouped.find((n) => n.id === 'ent_bowo')!, ungrouped);
-  assert.ok(Math.abs(bowoUngrouped.x - (bowoBefore.x + 25)) < 0.05);
+  // 2. Moving, scaling, and rotating the Container proportionally transforms all children
+  const origBowoX = bowoBefore.x;
+  entities = updateEntityTransform(entities, container.id, { x: container.x + 50, y: container.y + 10 });
+  const movedBowo = entities.find((e) => e.id === 'ent_bowo')!;
+  assert.equal(Math.round(movedBowo.x), Math.round(origBowoX + 50));
 
-  // Force two shapes to overlap and confirm penetration readout
-  const overlappingEntities = DEFAULT_SCENE_ENTITIES.map((e) =>
-    e.id === 'ent_qolbu' ? { ...e, x: DEFAULT_SCENE_ENTITIES[0].x + 10, y: DEFAULT_SCENE_ENTITIES[0].y } : e
-  );
-  const overlap = evaluateShapeOverlaps('shp_bowo', DEFAULT_COLLISION_SHAPES, overlappingEntities);
-  assert.equal(overlap.status, 'overlap');
-  assert.ok(overlap.items.some((it) => it.otherShapeId === 'shp_qolbu' && it.hit && it.penetrationPx > 0));
+  const movedContainer = entities.find((e) => e.id === container.id)!;
+  entities = updateEntityTransform(entities, movedContainer.id, { scaleX: 1.5, scaleY: 1.5, rotationDeg: 90 });
+  const scaledBowo = entities.find((e) => e.id === 'ent_bowo')!;
+  assert.equal(scaledBowo.scaleX, 1.5);
+  assert.equal(scaledBowo.rotationDeg, 90);
+
+  // 3. Ungroup restores children cleanly
+  entities = ungroupContainer(entities, container.id);
+  assert.equal(entities.some((e) => e.id === container.id), false);
+  assert.equal(entities.find((e) => e.id === 'ent_bowo')?.parentId, null);
+
+  // 4. Physics Presets apply exact configurations
+  entities = applyPhysicsPreset(entities, 'ent_bowo', 'bouncy');
+  assert.equal(entities.find((e) => e.id === 'ent_bowo')?.physics.restitution, PHYSICS_PRESETS.bouncy.config.restitution);
+  entities = applyPhysicsPreset(entities, 'ent_enemy_1', 'ghost');
+  assert.equal(entities.find((e) => e.id === 'ent_enemy_1')?.physics.isTrigger, true);
+
+  // 5. Visual Collision Shape Editor resizing + real-time overlap detection (box vs circle)
+  entities = updateEntityCollider(entities, 'ent_bowo', { kind: 'circle', radius: 30 });
+  entities = updateEntityTransform(entities, 'ent_bowo', { x: 200, y: 200 });
+  entities = updateEntityTransform(entities, 'ent_enemy_1', { x: 215, y: 200 });
+  const overlaps = detectEntityOverlaps(entities);
+  assert.ok(overlaps.some((o) => o.isTriggerOverlap && (o.aId === 'ent_bowo' || o.bId === 'ent_bowo')));
 });
 
-test('Agen Qolbu, 16 Local MCP tools, Wizard Game Builder, and Qolbu Arena AI (Solo / Co-Play / Adaptive VS) work end-to-end', () => {
-  assert.equal(TUTORIAL_STEPS.length, 10);
-  assert.equal(QOLBU_ENGINE_TOPICS.length, 12);
-  assert.equal(LOCAL_MCP_TOOLS.length, 16);
+test('Qolbu 9 Larangan Mutlak enforces dt bounds, double-buffered transforms, anti-exploit guard, and passes 8-stage audit + 2000 fuzz checks', () => {
+  assert.equal(fastClampDt(0.002), QOLBU_CONSTANTS.DT_MIN_SEC);
+  assert.equal(fastClampDt(0.5), QOLBU_CONSTANTS.DT_MAX_SEC);
+  assert.equal(fastClampDt(Number.NaN), QOLBU_CONSTANTS.DT_MAX_SEC);
 
-  const reply = askQolbuAgent('Bagaimana cara kerja Zero-GC di Itel A70?');
-  assert.equal(reply.recommendedTab, 'lab');
+  assert.equal(isValidMove(10, 10, 14, 10), true);
+  assert.equal(isValidMove(10, 10, Number.NaN, 10), false);
+  assert.equal(isValidMove(10, 10, Number.POSITIVE_INFINITY, 10), false);
+  assert.equal(isValidMove(10, 10, 10, -180), false);
+  assert.equal(isValidMove(10, 10, 800, 10), false);
 
-  const customGame = buildWizardGameSpec({
-    name: 'Uji Coba Arena',
-    genre: 'Arena',
-    sprite: 'Bowo',
-    characterName: 'Bowo',
-    preset: 'BOUNCY',
-    map: 'Arena Qolbu',
-    enemies: 2,
-    items: 3,
-    aiMode: 'Bareng',
-    difficulty: 'Normal',
-    durationSec: 60,
+  const db = new DoubleBufferedTransforms();
+  assert.equal(db.writeBack(0, 42, 84, 15), true);
+  assert.equal(db.writeBack(0, Number.NaN, 84, 15), false);
+  db.swapBuffers();
+  assert.equal(db.frontX[0], 42);
+  assert.equal(db.frontY[0], 84);
+
+  const audit = runQolbu8StageAudit(14, 19.2);
+  assert.equal(audit.allPassed, true);
+  assert.equal(audit.stages.length, 8);
+  assert.equal(audit.fuzzBlockedCount, audit.fuzzEventsTested);
+  assert.equal(ENGINE_CONNECTORS.length, 10);
+});
+
+test('In-app AI Agent + MCP Assistant guides players, explains engine, builds games, and drives Co-Op / Autopilot at 15Hz', () => {
+  let createdTitle = '';
+  let switchedConnector = '';
+  let switchedAiMode = 'off';
+
+  const ctx = {
+    gameName: 'Bowo',
+    activeLevel: 3 as const,
+    activeGenreId: 'platformer',
+    aiMode: 'off' as const,
+    perspectiveConnector: '2_5d_parallax' as const,
+    renderMode: '2.5D' as const,
+    physicsMode: 'Arcade' as const,
+    styleId: 'pixel' as const,
+  };
+
+  const actions = {
+    setGameName: (n: string) => {
+      createdTitle = n;
+    },
+    setPerspectiveConnector: (c: string) => {
+      switchedConnector = c;
+    },
+    setAiMode: (m: string) => {
+      switchedAiMode = m;
+    },
+  };
+
+  const qolbuAns = routeAgentPrompt('Jelaskan Qolbu 9 larangan mutlak', ctx, actions);
+  assert.equal(qolbuAns.toolTrace.tool, 'mcp.explain_engine');
+  assert.ok(qolbuAns.reply.includes('Zero-GC'));
+
+  const guideAns = routeAgentPrompt('Pandu aku menang Babak 3 Boss Kala', ctx, actions);
+  assert.equal(guideAns.toolTrace.tool, 'mcp.guide_player');
+  assert.ok(guideAns.reply.includes('Boss Kala'));
+
+  const createAns = routeAgentPrompt('Buatkan game baru: Isometric Cyber Arena', ctx, actions);
+  assert.equal(createAns.toolTrace.tool, 'mcp.create_game_project');
+  assert.equal(createdTitle, 'Isometric Light Quest');
+  assert.equal(switchedConnector, 'isometric');
+  assert.equal(switchedAiMode, 'coop');
+
+  const auditTool = executeMcpTool('mcp.run_qolbu_audit', {}, ctx, actions);
+  assert.equal(auditTool.ok, true);
+
+  // Verify 15Hz Co-Op Luma & Autopilot simulation steps
+  const world = createLevelWorld(1, undefined, 'ai_arena');
+  const luma = createAiCompanionState();
+  luma.healCooldown = 0;
+  world.player.hp = 35; // trigger emergency heal in coop
+  stepAi15Hz(world, luma, 'coop', 1 / 30);
+  const coopRes = stepAi15Hz(world, luma, 'coop', 1 / 30);
+  assert.equal(coopRes.inputOverride, null);
+  assert.equal(luma.active, true);
+  assert.equal(world.player.hp, 50);
+
+  // Autopilot generates directional movement and projectile parry
+  world.projectiles.push({
+    id: 999,
+    x: world.player.x + 25,
+    y: world.player.y,
+    vx: -120,
+    vy: 0,
+    fromPlayer: false,
+    damage: 10,
+    life: 1,
+    r: 5,
   });
-  assert.equal(customGame.name, 'Uji Coba Arena');
-
-  // 1. Solo AI moves autonomously toward objective on 15Hz ticks
-  const solo = createArenaWorld('solo', customGame);
-  const x0 = solo.player.x;
-  for (let i = 0; i < 8; i++) {
-    stepArenaWorld(solo, 1 / 30, { moveX: 0, moveY: 0 }, { coachDirective: 'Agresif', companionOrder: 'Ikut', speedMul: 1 });
-  }
-  assert.notEqual(solo.player.x, x0);
-
-  // 2. Co-Play Qolbu auto-heals low HP and provides 1x revive
-  const coplay = createArenaWorld('coplay', customGame);
-  coplay.player.hp = 25;
-  stepArenaWorld(coplay, 1 / 30, { moveX: 0, moveY: 0 }, { coachDirective: 'Seimbang', companionOrder: 'Ikut', speedMul: 1 });
-  stepArenaWorld(coplay, 1 / 30, { moveX: 0, moveY: 0 }, { coachDirective: 'Seimbang', companionOrder: 'Ikut', speedMul: 1 });
-  assert.ok(coplay.player.hp >= 45);
-
-  coplay.player.hp = 0;
-  stepArenaWorld(coplay, 1 / 30, { moveX: 0, moveY: 0 }, { coachDirective: 'Seimbang', companionOrder: 'Ikut', speedMul: 1 });
-  assert.equal(coplay.companionReviveLeft, 0);
-  assert.equal(coplay.status, 'playing');
-
-  // 3. VS Boss Kala adapts after repeated Dash Right moves
-  const vs = createArenaWorld('vs');
-  vs.player.facing = 1;
-  for (let i = 0; i < 3; i++) {
-    vs.player.dashCd = 0;
-    triggerArenaPlayerAction(vs, 'dash');
-  }
-  stepArenaWorld(vs, 1 / 30, { moveX: 0, moveY: 0 }, { coachDirective: 'Seimbang', companionOrder: 'Ikut', speedMul: 1 });
-  stepArenaWorld(vs, 1 / 30, { moveX: 0, moveY: 0 }, { coachDirective: 'Seimbang', companionOrder: 'Ikut', speedMul: 1 });
-  assert.ok(vs.adaptiveRule.includes('KIRI'));
+  const autoRes = stepAi15Hz(world, luma, 'autopilot', 1 / 30);
+  assert.ok(autoRes.inputOverride);
+  assert.equal(autoRes.inputOverride!.dashPressed, true);
+  assert.notEqual(autoRes.inputOverride!.moveX, 0);
 });
+
+test('QolbuSpace3D enforces Y-Up LookAt+Perspective math, 35m culling, 3-level LOD, 500m Origin Rebasing, and Camera A/B/C', () => {
+  const space = new QolbuSpace3D('follow_3_4', 720 / 1612);
+  assert.equal(space.capacity, SPACE3D_CONSTANTS.MAX_ENTITIES);
+  assert.equal(CAMERA_3_PRESETS.length, 3);
+  assert.equal(HYBRID_5_MODES.length, 5);
+
+  // Camera B Follow 3/4 converges eye -> target + (0, 8, 8)
+  const camB = createCamera3D('follow_3_4');
+  updateCameraModeBFollow34(camB, 10, 0, -4, 0.2);
+  assert.ok(camB.eyeX > 0 && camB.eyeY >= 8);
+
+  // Camera A Fixed Isometric stays locked
+  updateCameraModeAIsometric(camB);
+  assert.equal(camB.eyeX, 12);
+  assert.equal(camB.eyeY, 14);
+
+  // Camera C FPS Raycast preserves eyeY = playerY + 1.65 (flat horizon)
+  updateCameraModeCFpsRaycast(camB, 4, 0, -8, Math.PI * 0.5);
+  assert.equal(camB.eyeY, 1.65);
+  assert.equal(camB.targetY, 1.65);
+
+  // LOD & 35m culling + Fog
+  assert.equal(evaluateCullAndLod(5, true, false), 0);
+  assert.equal(evaluateCullAndLod(18, true, false), 1);
+  assert.equal(evaluateCullAndLod(30, true, false), 2);
+  assert.equal(evaluateCullAndLod(36, true, false), -1);
+  assert.equal(evaluateCullAndLod(8, true, true), -1); // 1-bit occlusion cull
+  assert.equal(calcFogFactor(10), 0);
+  assert.equal(calcFogFactor(35), 1);
+
+  // Origin Rebasing >500m
+  const rebase = evaluateOriginRebase(1250, -620, 0, 0);
+  assert.equal(rebase.rebased, true);
+  assert.equal(rebase.shiftX, 1000);
+  assert.equal(rebase.shiftZ, -500);
+
+  // Zero-GC SoA updateAll projects near entities cleanly and culls >35m entities
+  space.camera = createCamera3D('follow_3_4', 16 / 9);
+  space.setEntity(0, 0, 1, 0);
+  space.setEntity(1, 0, 0, -60); // >35m away -> culled
+  const counts = space.updateAll(1280, 720);
+  assert.equal(counts.visible, 1);
+  assert.equal(counts.culled, 1);
+  assert.ok(space.lodLevel[0] >= 0);
+  assert.equal(space.lodLevel[1], -1);
+});
+
+test('GitHub Repository Connectors cover all 6 categories and resolve offline gracefully', async () => {
+  assert.ok(CURATED_GITHUB_PLUGINS.length >= 20);
+  const cub = filterCuratedGitHubPlugins('cub3d', 'fake_3d_raycast');
+  assert.ok(cub.some((r) => r.repo === 'AghlaAbdo/42_Cub3D'));
+  const axmol = filterCuratedGitHubPlugins('axmol', 'web_mobile_lightweight');
+  assert.ok(axmol.some((r) => r.repo === 'axmolengine/axmol'));
+
+  const res = await searchGitHubReposWithFallback('raycast', 'fake_3d_raycast', 100);
+  assert.ok(res.results.length >= 1);
+});
+
+test('Tripo/Meshy Low-Poly 3D Mesh Generator & InstaPlay Complete Game Forge obey Itel A70 budgets', () => {
+  const heroMesh = generateMesh3DFromPrompt(101, 'Dawn Guardian Knight', 'character');
+  assert.ok(heroMesh.triangles.length <= SPACE3D_CONSTANTS.CHAR_TRIS_LIMIT);
+  assert.ok(heroMesh.objText.includes('v ') && heroMesh.objText.includes('f '));
+  const gltfParsed = JSON.parse(heroMesh.gltfJson) as { asset: { version: string }; meshes: unknown[] };
+  assert.equal(gltfParsed.asset.version, '2.0');
+  assert.equal(gltfParsed.meshes.length, 1);
+  assert.ok(heroMesh.lodCounts.lod0 > heroMesh.lodCounts.lod1);
+
+  const boxMesh = generateMesh3DFromPrompt(202, 'Crate Box', 'prop', 'gh_tripo_sr', true);
+  assert.equal(boxMesh.triangles.length, 12);
+
+  const bp = generateCompleteGameBlueprint(303, 'FPS Raycast Dungeon Autopilot');
+  assert.equal(bp.cameraPreset, 'fps_raycast');
+  assert.equal(bp.hybridMode, 'raycast_pseudo3d');
+  assert.equal(bp.aiMode, 'autopilot');
+  assert.equal(bp.prefabs.length, 3);
+  assert.equal(bp.levelQuests.length, 3);
+  assert.equal(bp.budgetReport.passesA70, true);
+  assert.ok(bp.budgetReport.drawCallsEst < SPACE3D_CONSTANTS.MAX_DRAW_CALLS);
+});
+
 
 

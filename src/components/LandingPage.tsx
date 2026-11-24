@@ -5,7 +5,15 @@ import { drawBowoCharacter, drawEnemyEntity, drawGateAsset, drawGroundTile, draw
 import { soundEngine } from '../engine/audio';
 import { LANGUAGE_NAMES, t } from '../engine/i18n';
 import { renderMode7Horizon } from '../engine/pseudo3d';
-import type { ArtStyleId, CharacterAnimState, DeviceProfile, LanguageCode, StudioTab, StyleOverrides } from '../engine/types';
+import type {
+  ArtStyleId,
+  CharacterAnimState,
+  DeviceProfile,
+  LanguageCode,
+  SaveSlotSummary,
+  StudioTab,
+  StyleOverrides,
+} from '../engine/types';
 import { PWAInstallButton } from './PWAInstallButton';
 
 interface LandingPageProps {
@@ -23,6 +31,8 @@ interface LandingPageProps {
   muted: boolean;
   setMuted: (m: boolean) => void;
   isOnline: boolean;
+  latestSave?: SaveSlotSummary | null;
+  onContinueSaved?: () => void;
   onStartPlay: () => void;
   onOpenTitleStage: () => void;
   onOpenStudioTab: (tab: StudioTab) => void;
@@ -45,6 +55,8 @@ export function LandingPage({
   muted,
   setMuted,
   isOnline,
+  latestSave,
+  onContinueSaved,
   onStartPlay,
   onOpenTitleStage,
   onOpenStudioTab,
@@ -243,6 +255,24 @@ export function LandingPage({
                   <span>{tr.openStudio}</span>
                 </button>
               </div>
+
+              {latestSave?.exists && onContinueSaved && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playSfx('ui_click');
+                    onContinueSaved();
+                  }}
+                  className="touch-btn flex w-full items-center justify-between gap-2 rounded-xl border border-emerald-500/45 bg-emerald-500/12 px-4 py-2.5 text-left text-xs font-bold text-emerald-300 transition hover:bg-emerald-500/20"
+                >
+                  <span>
+                    {tr.continueSaved} ({latestSave.id === 'auto' ? tr.autoSaveLabel : `${tr.slotLabel} ${latestSave.id}`})
+                  </span>
+                  <span className="font-mono-num text-[11px] text-(--text)">
+                    {tr.levelLabel} {latestSave.level} · HP {latestSave.hp} · {tr.scoreLabel} {latestSave.score}
+                  </span>
+                </button>
+              )}
 
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <button

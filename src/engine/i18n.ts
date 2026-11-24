@@ -10,10 +10,6 @@ export interface Translations {
   installApp: string;
   offlineBadge: string;
   onlineBadge: string;
-  offlineToastTitle: string;
-  offlineToastBody: string;
-  backOnlineToast: string;
-  dismissLabel: string;
   titleHint: string;
   pausedTitle: string;
   victoryTitle: string;
@@ -31,16 +27,24 @@ export interface Translations {
   gateOpenMsg: string;
   gateLockedMsg: string;
   practiceMode: string;
+  saveProgress: string;
+  loadProgress: string;
+  continueSaved: string;
+  quickSaveLabel: string;
+  autoSaveLabel: string;
+  slotLabel: string;
+  emptySlotLabel: string;
+  savedNotice: string;
+  loadedNotice: string;
   tabs: {
     play: string;
     scene: string;
+    agent: string;
     assets: string;
     generators: string;
     controls: string;
     art: string;
     lab: string;
-    agent: string;
-    arena: string;
     skills: string;
     services: string;
     export: string;
@@ -65,10 +69,6 @@ const ID: Translations = {
   installApp: 'Pasang Aplikasi (PWA)',
   offlineBadge: 'Offline Siap',
   onlineBadge: 'Online',
-  offlineToastTitle: 'Offline Mode',
-  offlineToastBody: 'Koneksi terputus — progres permainan tetap disimpan secara lokal.',
-  backOnlineToast: 'Kembali Online — penyimpanan lokal siap disinkronkan.',
-  dismissLabel: 'Tutup',
   titleHint: 'WASD/Panah gerak · Spasi lompat · J serang · K dash/parry · L burst · Esc jeda',
   pausedTitle: 'Permainan Dijeda',
   victoryTitle: 'Cahaya Kembali!',
@@ -86,19 +86,27 @@ const ID: Translations = {
   gateOpenMsg: 'Gerbang Cahaya Terbuka — Masuk untuk lanjut!',
   gateLockedMsg: 'Kumpulkan Pecahan & aktifkan saklar untuk membuka gerbang',
   practiceMode: 'Mode Latihan',
+  saveProgress: 'Simpan',
+  loadProgress: 'Muat',
+  continueSaved: 'Lanjutkan Progres Tersimpan',
+  quickSaveLabel: 'Simpan / Muat Cepat',
+  autoSaveLabel: 'Simpan Otomatis',
+  slotLabel: 'Slot',
+  emptySlotLabel: 'Kosong',
+  savedNotice: 'Tersimpan ke',
+  loadedNotice: 'Dimuat dari',
   tabs: {
     play: 'Main',
-    scene: 'Scene & Physics',
+    scene: 'Scene Editor',
+    agent: 'AI + MCP',
     assets: 'Aset',
     generators: 'Generator',
     controls: 'Kontrol',
     art: '12 Style',
     lab: 'Engine Lab',
-    agent: 'Agen AI & MCP',
-    arena: 'Arena AI',
     skills: 'AI Skills',
     services: 'Layanan',
-    export: 'Ekspor & APK',
+    export: 'Ekspor & Docs',
   },
   actions: {
     jump: 'Lompat',
@@ -120,10 +128,6 @@ const EN: Translations = {
   installApp: 'Install App (PWA)',
   offlineBadge: 'Offline Ready',
   onlineBadge: 'Online',
-  offlineToastTitle: 'Offline Mode',
-  offlineToastBody: 'Network connection lost — progress is being saved locally.',
-  backOnlineToast: 'Back Online — local saves are ready.',
-  dismissLabel: 'Dismiss',
   titleHint: 'WASD/Arrows move · Space jump · J attack · K dash/parry · L burst · Esc pause',
   pausedTitle: 'Game Paused',
   victoryTitle: 'Light Restored!',
@@ -141,19 +145,27 @@ const EN: Translations = {
   gateOpenMsg: 'Gate of Light Open — Enter to advance!',
   gateLockedMsg: 'Collect Shards & trigger switches to unlock the gate',
   practiceMode: 'Practice Mode',
+  saveProgress: 'Save',
+  loadProgress: 'Load',
+  continueSaved: 'Continue Saved Game',
+  quickSaveLabel: 'Quick Save / Load',
+  autoSaveLabel: 'Auto-Save',
+  slotLabel: 'Slot',
+  emptySlotLabel: 'Empty',
+  savedNotice: 'Saved to',
+  loadedNotice: 'Loaded from',
   tabs: {
     play: 'Play',
-    scene: 'Scene & Physics',
+    scene: 'Scene Editor',
+    agent: 'AI + MCP',
     assets: 'Assets',
     generators: 'Generators',
     controls: 'Controls',
     art: '12 Styles',
     lab: 'Engine Lab',
-    agent: 'AI Agent & MCP',
-    arena: 'AI Arena',
     skills: 'AI Skills',
     services: 'Services',
-    export: 'Export & APK',
+    export: 'Export & Docs',
   },
   actions: {
     jump: 'Jump',
@@ -173,10 +185,6 @@ const JA: Translations = {
   openStudio: 'エンジンスタジオ',
   controlsBtn: 'タッチ操作設定',
   installApp: 'アプリをインストール',
-  offlineToastTitle: 'Offline Mode',
-  offlineToastBody: 'オフラインモード — 進行状況はローカルに保存されています。',
-  backOnlineToast: 'オンラインに復帰しました。',
-  dismissLabel: '閉じる',
   pausedTitle: '一時停止中',
   victoryTitle: '光が戻った！',
   gameOverTitle: 'ゲームオーバー',
@@ -188,6 +196,13 @@ const JA: Translations = {
   switchesLabel: 'スイッチ',
   coinsLabel: 'コイン',
   scoreLabel: 'スコア',
+  continueSaved: 'セーブデータから再開',
+  saveProgress: 'セーブ',
+  loadProgress: 'ロード',
+  quickSaveLabel: 'クイックセーブ / ロード',
+  autoSaveLabel: 'オートセーブ',
+  slotLabel: 'スロット',
+  emptySlotLabel: '空き',
 };
 
 const KO: Translations = {
@@ -198,10 +213,6 @@ const KO: Translations = {
   openStudio: '엔진 스튜디오',
   controlsBtn: '터치 컨트롤',
   installApp: '앱 설치 (PWA)',
-  offlineToastTitle: 'Offline Mode',
-  offlineToastBody: '오프라인 모드 — 진행 상황이 로컬에 저장되고 있습니다.',
-  backOnlineToast: '다시 온라인 상태입니다.',
-  dismissLabel: '닫기',
   pausedTitle: '일시 정지',
   victoryTitle: '빛이 돌아왔다!',
   gameOverTitle: '게임 오버',
@@ -213,6 +224,13 @@ const KO: Translations = {
   switchesLabel: '스위치',
   coinsLabel: '코인',
   scoreLabel: '점수',
+  continueSaved: '저장된 게임 이어하기',
+  saveProgress: '저장',
+  loadProgress: '불러오기',
+  quickSaveLabel: '빠른 저장 / 불러오기',
+  autoSaveLabel: '자동 저장',
+  slotLabel: '슬롯',
+  emptySlotLabel: '비어 있음',
 };
 
 const ES: Translations = {
@@ -223,10 +241,6 @@ const ES: Translations = {
   openStudio: 'Estudio Motor',
   controlsBtn: 'Controles Táctiles',
   installApp: 'Instalar App (PWA)',
-  offlineToastTitle: 'Offline Mode',
-  offlineToastBody: 'Sin conexión — tu progreso se está guardando localmente.',
-  backOnlineToast: 'Conexión restaurada.',
-  dismissLabel: 'Cerrar',
   pausedTitle: 'Juego en Pausa',
   victoryTitle: '¡Luz Restaurada!',
   gameOverTitle: 'Derrota',
@@ -238,6 +252,13 @@ const ES: Translations = {
   switchesLabel: 'Interruptores',
   coinsLabel: 'Monedas',
   scoreLabel: 'Puntuación',
+  continueSaved: 'Continuar Partida Guardada',
+  saveProgress: 'Guardar',
+  loadProgress: 'Cargar',
+  quickSaveLabel: 'Guardado / Carga Rápida',
+  autoSaveLabel: 'Autoguardado',
+  slotLabel: 'Ranura',
+  emptySlotLabel: 'Vacío',
 };
 
 export const I18N_MAP: Record<LanguageCode, Translations> = {

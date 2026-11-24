@@ -1,38 +1,40 @@
 import { ArrowLeft, Play } from 'lucide-react';
-import { Component, type ReactNode } from 'react';
+import { Component, type Dispatch, type ReactNode, type SetStateAction } from 'react';
 
 import { soundEngine } from '../engine/audio';
 import { t } from '../engine/i18n';
 import type {
+  AiPlayMode,
   AnalyticsSummary,
-  ArenaMode,
   ArtStyleId,
   AuthProfile,
-  CollisionShapeSpec,
+  Camera3DPresetId,
   DeviceProfile,
   DeviceTierId,
-  EventSheetRule,
   GeneratedCharacterSpec,
+  GeneratedGameBlueprintSpec,
   GenreTemplate,
   HudSnapshot,
+  HybridRender5Mode,
   LanguageCode,
+  PerspectiveConnectorId,
   PhysicsMode,
   RenderMode,
+  SaveSlotId,
   SceneEntityNode,
   StudioTab,
   StyleOverrides,
   TouchControlConfig,
+  VisualQualityPresetId,
   WeatherKind,
-  WizardGameSpec,
 } from '../engine/types';
 import { PWAInstallButton } from './PWAInstallButton';
-import { StudioAgentMcpTab } from './StudioAgentMcpTab';
-import { StudioArenaAiTab } from './StudioArenaAiTab';
-import { StudioArtTab, StudioControlsTab } from './StudioControlsArtTabs';
+import { StudioAgentTab } from './StudioAgentTab';
+import { StudioControlsTab, StudioArtTab } from './StudioControlsArtTabs';
 import { StudioGeneratorsTab } from './StudioGeneratorsTab';
 import { StudioExportTab, StudioLabTab, StudioServicesTab } from './StudioLabServicesExportTabs';
 import { StudioAssetsTab, StudioPlayTab } from './StudioPlayAssetsTabs';
-import { StudioSceneTab } from './StudioSceneTab';
+import { StudioSceneEditorTab } from './StudioSceneEditorTab';
 import { StudioSkillsTab } from './StudioSkillsTab';
 
 class TabErrorBoundary extends Component<{ children: ReactNode; tabName: string }, { hasError: boolean }> {
@@ -103,28 +105,34 @@ interface StudioWorkspaceProps {
   analytics: AnalyticsSummary;
   analyticsEnabled: boolean;
   setAnalyticsEnabled: (v: boolean) => void;
-  eventRules: EventSheetRule[];
-  setEventRules: (updater: EventSheetRule[] | ((prev: EventSheetRule[]) => EventSheetRule[])) => void;
   hud: HudSnapshot;
   isOnline: boolean;
   customCharacter: GeneratedCharacterSpec | null;
   setCustomCharacter: (c: GeneratedCharacterSpec | null) => void;
-  sceneEntities: SceneEntityNode[];
-  setSceneEntities: (updater: SceneEntityNode[] | ((prev: SceneEntityNode[]) => SceneEntityNode[])) => void;
-  collisionShapes: CollisionShapeSpec[];
-  setCollisionShapes: (updater: CollisionShapeSpec[] | ((prev: CollisionShapeSpec[]) => CollisionShapeSpec[])) => void;
-  myGames: WizardGameSpec[];
-  setMyGames: (updater: WizardGameSpec[] | ((prev: WizardGameSpec[]) => WizardGameSpec[])) => void;
-  activeArenaSpec: WizardGameSpec | null;
-  forcedArenaMode?: ArenaMode;
-  mcpLogs: string[];
-  onExecuteMcpTool: (toolId: string) => void;
-  onPlayWizardGame: (game: WizardGameSpec) => void;
   onBackToLanding: () => void;
   onBackToTitle: () => void;
-  onLaunchGame: (lvl?: 1 | 2 | 3, genre?: GenreTemplate) => void;
+  onLaunchGame: (lvl?: 1 | 2 | 3, genre?: GenreTemplate, aiModeOverride?: AiPlayMode) => void;
+  onLaunchBlueprint: (bp: GeneratedGameBlueprintSpec) => void;
   onApplyLoadedSave: (level: 1 | 2 | 3, coins: number, score: number, potions: number) => void;
+  onSaveProgress?: (slotId: SaveSlotId) => { ok: boolean; bytes: number; level: 1 | 2 | 3 };
+  onLoadProgress?: (slotId: SaveSlotId, launchImmediately?: boolean) => { ok: boolean; level?: 1 | 2 | 3; score?: number; migrated?: boolean; checksumValid?: boolean };
+  onDeleteSaveSlot?: (slotId: SaveSlotId) => void;
+  saveRevision?: number;
   onAddBonusCoinsPotions: (coins: number, potions: number) => void;
+  aiMode: AiPlayMode;
+  setAiMode: (m: AiPlayMode) => void;
+  perspectiveConnector: PerspectiveConnectorId;
+  setPerspectiveConnector: (c: PerspectiveConnectorId) => void;
+  cameraPreset: Camera3DPresetId;
+  setCameraPreset: (c: Camera3DPresetId) => void;
+  hybridMode: HybridRender5Mode;
+  setHybridMode: (m: HybridRender5Mode) => void;
+  activeGitHubRepoId: string;
+  setActiveGitHubRepoId: (id: string) => void;
+  visualQuality: VisualQualityPresetId;
+  setVisualQuality: (q: VisualQualityPresetId) => void;
+  sceneEntities: SceneEntityNode[];
+  setSceneEntities: Dispatch<SetStateAction<SceneEntityNode[]>>;
 }
 
 export function StudioWorkspace(props: StudioWorkspaceProps) {
@@ -134,7 +142,6 @@ export function StudioWorkspace(props: StudioWorkspaceProps) {
     { id: 'play', label: tr.tabs.play },
     { id: 'scene', label: tr.tabs.scene },
     { id: 'agent', label: tr.tabs.agent },
-    { id: 'arena', label: tr.tabs.arena },
     { id: 'assets', label: tr.tabs.assets },
     { id: 'generators', label: tr.tabs.generators },
     { id: 'controls', label: tr.tabs.controls },
@@ -252,28 +259,42 @@ export function StudioWorkspace(props: StudioWorkspaceProps) {
           )}
 
           {props.activeTab === 'scene' && (
-            <StudioSceneTab
+            <StudioSceneEditorTab
               entities={props.sceneEntities}
               setEntities={props.setSceneEntities}
-              shapes={props.collisionShapes}
-              setShapes={props.setCollisionShapes}
+              perspectiveConnector={props.perspectiveConnector}
+              activeLevel={props.activeLevel}
+              onLaunchGame={() => props.onLaunchGame(props.activeLevel)}
             />
           )}
 
           {props.activeTab === 'agent' && (
-            <StudioAgentMcpTab
-              hud={props.hud}
-              myGames={props.myGames}
-              setMyGames={props.setMyGames}
-              mcpLogs={props.mcpLogs}
-              onExecuteMcpTool={props.onExecuteMcpTool}
-              onNavigateTab={props.setActiveTab}
-              onPlayWizardGame={props.onPlayWizardGame}
+            <StudioAgentTab
+              gameName={props.gameName}
+              setGameName={props.setGameName}
+              activeLevel={props.activeLevel}
+              setActiveLevel={props.setActiveLevel}
+              activeGenreId={props.activeGenreId}
+              aiMode={props.aiMode}
+              setAiMode={props.setAiMode}
+              perspectiveConnector={props.perspectiveConnector}
+              setPerspectiveConnector={props.setPerspectiveConnector}
+              cameraPreset={props.cameraPreset}
+              setCameraPreset={props.setCameraPreset}
+              hybridMode={props.hybridMode}
+              setHybridMode={props.setHybridMode}
+              activeGitHubRepoId={props.activeGitHubRepoId}
+              setActiveGitHubRepoId={props.setActiveGitHubRepoId}
+              visualQuality={props.visualQuality}
+              setVisualQuality={props.setVisualQuality}
+              renderMode={props.renderMode}
+              setRenderMode={props.setRenderMode}
+              physicsMode={props.physicsMode}
+              setPhysicsMode={props.setPhysicsMode}
+              styleId={props.styleId}
+              setStyleId={props.setStyleId}
+              onLaunchGame={props.onLaunchGame}
             />
-          )}
-
-          {props.activeTab === 'arena' && (
-            <StudioArenaAiTab activeSpec={props.activeArenaSpec} forcedMode={props.forcedArenaMode} />
           )}
 
           {props.activeTab === 'assets' && (
@@ -291,6 +312,10 @@ export function StudioWorkspace(props: StudioWorkspaceProps) {
               styleOverrides={props.styleOverrides}
               customCharacter={props.customCharacter}
               onApplyCharacter={props.setCustomCharacter}
+              cameraPreset={props.cameraPreset}
+              setCameraPreset={props.setCameraPreset}
+              activeGitHubRepoId={props.activeGitHubRepoId}
+              onLaunchBlueprint={props.onLaunchBlueprint}
             />
           )}
 
@@ -325,9 +350,6 @@ export function StudioWorkspace(props: StudioWorkspaceProps) {
               gameName={props.gameName}
               styleId={props.styleId}
               buttonSize={props.touchConfig.buttonSize}
-              deviceProfile={props.deviceProfile}
-              eventRules={props.eventRules}
-              setEventRules={props.setEventRules}
               hud={props.hud}
             />
           )}
@@ -347,6 +369,10 @@ export function StudioWorkspace(props: StudioWorkspaceProps) {
               analyticsEnabled={props.analyticsEnabled}
               setAnalyticsEnabled={props.setAnalyticsEnabled}
               onApplyLoadedSave={props.onApplyLoadedSave}
+              onSaveProgress={props.onSaveProgress}
+              onLoadProgress={props.onLoadProgress}
+              onDeleteSaveSlot={props.onDeleteSaveSlot}
+              saveRevision={props.saveRevision}
               onAddBonusCoinsPotions={props.onAddBonusCoinsPotions}
               isOnline={props.isOnline}
             />

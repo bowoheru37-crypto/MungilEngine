@@ -8,7 +8,27 @@
  * Runs 100% on Canvas 2D with zero WebGL shader compilation stutter (Itel A70 friendly).
  */
 
-import type { ArtStyleSpec, CharacterAnimState, GeneratedCharacterSpec, GeneratedTerrainSpec, StyleOverrides } from './types';
+import {
+  calcFogFactor,
+  composeModelMatrix,
+  computeLookAtMatrix,
+  computePerspectiveMatrix,
+  createCamera3D,
+  multiplyMat4,
+  projectPointWithMatrix,
+  updateCameraModeAIsometric,
+  updateCameraModeBFollow34,
+  updateCameraModeCFpsRaycast,
+} from './qolbuSpace3d';
+import type {
+  ArtStyleSpec,
+  Camera3DPresetId,
+  CharacterAnimState,
+  GeneratedCharacterSpec,
+  GeneratedMesh3DSpec,
+  GeneratedTerrainSpec,
+  StyleOverrides,
+} from './types';
 
 export interface ProjectedPoint {
   sx: number;
@@ -312,3 +332,159 @@ export function renderVoxelHeightmapTerrain(
     }
   }
 }
+
+const PREVIEW_VIEW_MAT = new Float32Array(16);
+const PREVIEW_PROJ_MAT = new Float32Array(16);
+const PREVIEW_MODEL_MAT = new Float32Array(16);
+const PREVIEW_MVP_MAT = new Float32Array(16);
+
+/**
+ * Renders a GeneratedMesh3DSpec using the exact QolbuSpace3D 5-Space / 3-Matrix Pipeline:
+ * Model (T*R*S) -> View (LookAt) -> Perspective (FOV=60, Near=0.1, Far=100) -> Screen (/ w),
+ * plus Painter's Depth Sort, Forward Mobile Lambert shading, Distance Fog, and Blob Shadow.
+ */
+export function renderMesh3DPreview(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  mesh: GeneratedMesh3DSpec,
+  opts: {
+    yawRad: number;
+    pitchRad?: number;
+    cameraPreset: Camera3DPresetId;
+    lod: 0 | 1 | 2;
+    wireframe?: boolean;
+  }
+): { drawnTris: number; drawCalls: number } {
+  // Sky + Horizon Fog backdrop
+  const bg = ctx.createLinearGradient(0, 0, 0, h);
+  bg.addColorStop(0, '#070b14');
+  bg.addColorStop(1, '#132033');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+
+  const cam = createCamera3D(opts.cameraPreset, h > 0 ? w / h : 1);
+  if (opts.cameraPreset === 'iso_fixed') {
+    updateCameraModeAIsometric(cam);
+    cam.eyeX = 3.2;
+    cam.eyeY = 3.1;
+    cam.eyeZ = 3.2;
+    cam.targetY = 0.9;
+  } else if (opts.cameraPreset === 'fps_raycast') {
+    updateCameraModeCFpsRaycast(cam, 0, -0.5, 3.3, 0);
+    cam.targetY = 0.95;
+  } else {
+    updateCameraModeBFollow34(cam, 0, 0.9, 0, 1);
+    cam.eyeX = 0;
+    cam.eyeY = 2.6;
+    cam.eyeZ = 4.2;
+  }
+
+  computeLookAtMatrix(PREVIEW_VIEW_MAT, cam.eyeX, cam.eyeY, cam.eyeZ, cam.targetX, cam.targetY, cam.targetZ);
+  computePerspectiveMatrix(PREVIEW_PROJ_MAT, cam.fovDeg, cam.aspect, cam.near, cam.far);
+  composeModelMatrix(PREVIEW_MODEL_MAT, 0, 0, 0, 0, opts.pitchRad ?? 0, opts.yawRad, 1, 1, 1);
+  multiplyMat4(PREVIEW_MVP_MAT, 0, PREVIEW_PROJ_MAT, 0, PREVIEW_VIEW_MAT, 0);
+  multiplyMat4(PREVIEW_MVP_MAT, 0, PREVIEW_MVP_MAT, 0, PREVIEW_MODEL_MAT, 0);
+
+  // Project all vertices once
+  const projected = mesh.vertices.map((v) =>
+    projectPointWithMatrix(
+      PREVIEW_MVP_MAT,
+      0,
+      v.x,
+      v.y,
+      v.z,
+      w,
+      h,
+      { sx: 0, sy: 0, ndcX: 0, ndcY: 0, ndcZ: 0, clipW: 1, visible: false }
+    )
+  );
+
+  // Ground reference plane + Blob shadow at (0, 0, 0)
+  const originProj = projectPointWithMatrix(
+    PREVIEW_MVP_MAT,
+    0,
+    0,
+    0,
+    0,
+    w,
+    h,
+    { sx: 0, sy: 0, ndcX: 0, ndcY: 0, ndcZ: 0, clipW: 1, visible: false }
+  );
+  if (originProj.visible && mesh.blobShadow) {
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.beginPath();
+    ctx.ellipse(originProj.sx, originProj.sy + 4, 42, 13, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Respect requested LOD count (LOD0 full, LOD1 45%, LOD2 <=12 tris)
+  const triLimit =
+    opts.lod === 2 ? mesh.lodCounts.lod2 : opts.lod === 1 ? mesh.lodCounts.lod1 : mesh.lodCounts.lod0;
+  const activeTris = mesh.triangles.slice(0, triLimit);
+
+  // Transform world vertices by Model Y rotation for Lambert lighting + Painter's Z-sort
+  const cosY = Math.cos(opts.yawRad);
+  const sinY = Math.sin(opts.yawRad);
+  const sorted = activeTris
+    .map((tri) => {
+      const pa = projected[tri.a];
+      const pb = projected[tri.b];
+      const pc = projected[tri.c];
+      if (!pa || !pb || !pc || !pa.visible || !pb.visible || !pc.visible) return null;
+      const depth = (pa.clipW + pb.clipW + pc.clipW) / 3;
+      const va = mesh.vertices[tri.a];
+      const vb = mesh.vertices[tri.b];
+      const vc = mesh.vertices[tri.c];
+
+      // Rotate edge vectors for directional sun light (0.45, 0.78, 0.42)
+      const ux = vb.x - va.x;
+      const uy = vb.y - va.y;
+      const uz = vb.z - va.z;
+      const vx = vc.x - va.x;
+      const vy = vc.y - va.y;
+      const vz = vc.z - va.z;
+      const nxRaw = uy * vz - uz * vy;
+      const nyRaw = uz * vx - ux * vz;
+      const nzRaw = ux * vy - uy * vx;
+      const nx = nxRaw * cosY + nzRaw * sinY;
+      const ny = nyRaw;
+      const nz = -nxRaw * sinY + nzRaw * cosY;
+      const nLen = Math.hypot(nx, ny, nz) || 1;
+      const lambert = Math.max(0.28, (nx * 0.45 + ny * 0.78 + nz * 0.42) / nLen * 0.65 + 0.45);
+      const fog = calcFogFactor(depth * 2.2);
+      return { tri, pa, pb, pc, depth, lambert, fog };
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null)
+    .sort((a, b) => b.depth - a.depth);
+
+  for (const item of sorted) {
+    ctx.beginPath();
+    ctx.moveTo(item.pa.sx, item.pa.sy);
+    ctx.lineTo(item.pb.sx, item.pb.sy);
+    ctx.lineTo(item.pc.sx, item.pc.sy);
+    ctx.closePath();
+
+    if (!opts.wireframe) {
+      ctx.fillStyle = item.tri.color;
+      ctx.globalAlpha = Math.max(0.25, item.lambert * (1 - item.fog * 0.5));
+      ctx.fill();
+    }
+    ctx.globalAlpha = opts.wireframe ? 0.9 : 0.35;
+    ctx.strokeStyle = opts.wireframe ? '#38bdf8' : '#0f172a';
+    ctx.lineWidth = opts.wireframe ? 1.2 : 0.75;
+    ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // Compact HUD readout inside canvas corner
+  ctx.fillStyle = 'rgba(2,6,23,0.72)';
+  ctx.fillRect(8, 8, 178, 22);
+  ctx.fillStyle = '#38bdf8';
+  ctx.font = 'bold 10px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText(`LOD${opts.lod} · ${sorted.length} tris · ${opts.cameraPreset}`, 14, 22);
+
+  return { drawnTris: sorted.length, drawCalls: mesh.drawCallsEst };
+}
+

@@ -183,6 +183,19 @@ export const GENRE_TEMPLATES: GenreTemplate[] = [
     gravityMul: 0.95,
     enemyDensity: 1,
   },
+  {
+    id: 'ai_arena',
+    name: 'AI Co-Op Arena',
+    simKind: 'topdown',
+    mechanic: 'Play WITH Luma AI Co-Op or watch AI Auto-Play clear arenas at 15Hz',
+    renderMode: '2.5D',
+    physicsMode: 'Arcade',
+    defaultStyle: 'cyberpunk',
+    quest: 'Team up with Luma AI or toggle AI Auto-Play to clear the arena',
+    speedMul: 1.1,
+    gravityMul: 0,
+    enemyDensity: 1.15,
+  },
 ];
 
 export const ASSET_CATALOG: AssetEntry[] = [
@@ -401,4 +414,48 @@ export const KEYWORD_TOP5_REPOS: Record<
     { name: 'Itel-A70-Thermal-Guard', license: 'MIT', tier: 'A', keywordGroup: 'mobile_engine', what: 'Low-entry Android 30FPS Eco & power-saver idle throttling', adapt: 'Auto Power Saver, idle frame cap & Web Audio suspend' },
   ],
 };
+
+export const GENERATOR_TOP3_REPOS: Array<{ group: string; repos: Array<{ name: string; license: string; pattern: string }> }> = [
+  {
+    group: 'Image & Sprite from Text/Image',
+    repos: [
+      { name: 'lospec/pixel-sprite-generator', license: 'MIT', pattern: 'Symmetrical mirror sprite mask + outline auto-pass' },
+      { name: 'a115/pixelforge-canvas', license: 'MIT', pattern: 'Zero-dep Offscreen/Canvas 16x16 palette quantization' },
+      { name: 'chriscourses/sprite-atlas', license: 'MIT', pattern: 'Compact sprite sheet packing for <=24 draw calls' },
+    ],
+  },
+  {
+    group: '3D Rig & Animation / Video / Movie',
+    repos: [
+      { name: 'metafizzy/zdog', license: 'MIT', pattern: '5-slice Z-stack pseudo-3D character rotation' },
+      { name: 'theatrejs/theatre (timeline pattern)', license: 'Apache-2.0', pattern: 'Keyframe timeline interpolation + A-B pose blend' },
+      { name: 'webm-wasm / MediaRecorder', license: 'MIT', pattern: 'Canvas captureStream() offline WebM cutscene clip' },
+    ],
+  },
+  {
+    group: 'Movement, Behavior FSM & Physics/UI',
+    repos: [
+      { name: 'statelyai/xstate (FSM pattern)', license: 'MIT', pattern: 'Deterministic movement & enemy AI state transitions' },
+      { name: 'GDevelop/EventSheet', license: 'MIT', pattern: 'WHEN -> THEN no-code gameplay & UI rule builder' },
+      { name: 'liabru/matter-js', license: 'MIT', pattern: 'Arcade/Realistic/Zero-G kinematics presets' },
+    ],
+  },
+  {
+    group: 'Audio SFX, Dubbing & Subtitles',
+    repos: [
+      { name: 'KilledByAPixel/ZzFX', license: 'MIT', pattern: 'Micro Web Audio procedural SFX envelope synth' },
+      { name: 'Subtitle/SRT-WebVTT-Spec', license: 'MIT', pattern: 'Lightweight SRT & WebVTT timed dialogue export' },
+      { name: 'WebSpeech / Formant-Synth', license: 'MIT', pattern: 'Offline speech synthesis & formant voice tones' },
+    ],
+  },
+  {
+    group: 'Web, APK, AI Engine & MCP',
+    repos: [
+      { name: 'ionic-team/capacitor', license: 'MIT', pattern: 'One-click Android APK WebView wrapper config' },
+      { name: 'modelcontextprotocol/servers', license: 'MIT', pattern: 'MCP tool JSON schema for external AI agents' },
+      { name: 'vite-pwa/pwa', license: 'MIT', pattern: 'Service Worker + offline cache bundle (<1 MB)' },
+    ],
+  },
+];
+
 

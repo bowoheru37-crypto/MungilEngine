@@ -1,24 +1,41 @@
-import { Download, Film, Music, Play, RefreshCw, Sparkles, Square, Volume2 } from 'lucide-react';
+import { Box, Download, Film, Music, Play, RefreshCw, Sparkles, Square, Volume2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 
 import { drawBowoCharacter, drawGroundTile, drawRockAsset, drawTreeAsset, getStyleSpec } from '../engine/artStyles';
 import { assetManager } from '../engine/assetManager';
 import { soundEngine } from '../engine/audio';
 import {
+  ATELIER_PRESETS,
+  composeMovieFromPrompt,
   generateCharacter,
+  generateCompleteGameBlueprint,
   generateCutsceneSpec,
+  generateDubbingSubtitleSpec,
+  generateGameplaySceneAndRules,
+  generateImageSpriteFromPrompt,
+  generateMesh3DFromPrompt,
   generateMusicTrack,
+  generatePlatformTargetSpec,
   generatePropAsset,
+  generateRig3DFromPrompt,
   generateSfxSpec,
+  generateStateMachineSpec,
   generateTerrainSpec,
+  parseAtelierSetupJson,
 } from '../engine/generators';
-import { renderVoxelHeightmapTerrain } from '../engine/pseudo3d';
+import { CURATED_GITHUB_PLUGINS } from '../engine/githubConnectors';
+import { renderMesh3DPreview, renderVoxelHeightmapTerrain } from '../engine/pseudo3d';
+import { CAMERA_3_PRESETS } from '../engine/qolbuSpace3d';
 import type {
   ArtStyleId,
+  Camera3DPresetId,
   CharacterAnimState,
   GeneratedCharacterSpec,
+  GeneratedGameBlueprintSpec,
+  GeneratedMesh3DSpec,
   GeneratedPropSpec,
   GeneratedSfxSpec,
+  GeneratedTargetConfigSpec,
   GeneratedTerrainSpec,
   GeneratedTrackSpec,
   StyleOverrides,
@@ -31,12 +48,16 @@ interface StudioGeneratorsTabProps {
   styleOverrides: StyleOverrides;
   customCharacter: GeneratedCharacterSpec | null;
   onApplyCharacter: (c: GeneratedCharacterSpec | null) => void;
+  cameraPreset?: Camera3DPresetId;
+  setCameraPreset?: (c: Camera3DPresetId) => void;
+  activeGitHubRepoId?: string;
+  onLaunchBlueprint?: (bp: GeneratedGameBlueprintSpec) => void;
 }
 
-type GenSection = 'character' | 'music' | 'sfx' | 'video' | 'terrain' | 'props';
+type GenSection = 'character' | 'image' | 'music' | 'sfx' | 'video' | 'terrain' | 'systems' | 'targets';
 
-function downloadJson(name: string, payload: unknown) {
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+function downloadText(name: string, text: string, mime = 'application/json') {
+  const blob = new Blob([text], { type: mime });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -45,60 +66,106 @@ function downloadJson(name: string, payload: unknown) {
   URL.revokeObjectURL(url);
 }
 
+function downloadJson(name: string, payload: unknown) {
+  downloadText(name, JSON.stringify(payload, null, 2), 'application/json');
+}
+
 export function StudioGeneratorsTab({
   styleId,
   customPalettes,
   styleOverrides,
   customCharacter,
   onApplyCharacter,
+  cameraPreset = 'follow_3_4',
+  setCameraPreset,
+  activeGitHubRepoId = 'gh_tripo_sr',
+  onLaunchBlueprint,
 }: StudioGeneratorsTabProps) {
   const style = getStyleSpec(styleId, customPalettes);
   const [subTab, setSubTab] = useState<GenSection>('character');
 
-  // 1. Character 2D/3D
+  // 1. Character 2D/3D + CharacterAtelier Presets + Tripo/Meshy Low-Poly 3D Mesh
   const [charSeed, setCharSeed] = useState(404);
   const [charDim, setCharDim] = useState<'2D' | '3D-Stack'>('3D-Stack');
   const [charArchetype, setCharArchetype] = useState<GeneratedCharacterSpec['archetype']>('Guardian');
   const [charPose, setCharPose] = useState<CharacterAnimState>('idle');
+  const [charPrompt, setCharPrompt] = useState('Guardian of Dawn Light');
+  const [atelierPreset, setAtelierPreset] = useState<keyof typeof ATELIER_PRESETS>('warm_eco');
+  const [atelierMsg, setAtelierMsg] = useState('');
   const [charSpec, setCharSpec] = useState<GeneratedCharacterSpec>(() => generateCharacter(404, '3D-Stack', 'Guardian'));
   const charCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // 2. Music
-  const [musicSeed, setMusicSeed] = useState(120);
-  const [musicScale, setMusicScale] = useState<GeneratedTrackSpec['scale']>('pentatonic');
-  const [musicBpm, setMusicBpm] = useState(128);
-  const [trackSpec, setTrackSpec] = useState<GeneratedTrackSpec>(() => generateMusicTrack(120, 'pentatonic', 128));
-  const [musicPlaying, setMusicPlaying] = useState(false);
+  const [meshPrompt, setMeshPrompt] = useState('Armored Dawn Knight');
+  const [meshArch, setMeshArch] = useState<GeneratedMesh3DSpec['archetype']>('character');
+  const [meshRepoId, setMeshRepoId] = useState('gh_tripo_sr');
+  const [meshBox12, setMeshBox12] = useState(false);
+  const [meshLod, setMeshLod] = useState<0 | 1 | 2>(0);
+  const [meshWireframe, setMeshWireframe] = useState(false);
+  const [meshYawDeg, setMeshYawDeg] = useState(28);
+  const [meshCam, setMeshCam] = useState<Camera3DPresetId>(cameraPreset);
+  const [meshSpec, setMeshSpec] = useState<GeneratedMesh3DSpec>(() =>
+    generateMesh3DFromPrompt(404, 'Armored Dawn Knight', 'character', 'gh_tripo_sr', false)
+  );
+  const meshCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // 3. SFX
-  const [sfxSeed, setSfxSeed] = useState(88);
-  const [sfxPreset, setSfxPreset] = useState<'jump' | 'slash' | 'coin' | 'laser' | 'impact' | 'ui_chime'>('jump');
-  const [sfxSpec, setSfxSpec] = useState<GeneratedSfxSpec>(() => generateSfxSpec(88, 'jump'));
-  const sfxCanvasRef = useRef<HTMLCanvasElement | null>(null);
-
-  // 4. Video / Cutscene
-  const [cutSeed, setCutSeed] = useState(777);
-  const [cutWeather, setCutWeather] = useState<WeatherKind>('Cerah');
-  const [cutSpec, setCutSpec] = useState(() => generateCutsceneSpec(777, 'Cerah'));
-  const [cutPlaying, setCutPlaying] = useState(true);
-  const [videoExportMsg, setVideoExportMsg] = useState('');
-  const cutCanvasRef = useRef<HTMLCanvasElement | null>(null);
-
-  // 5. Terrain 2D/3D
-  const [terSeed, setTerSeed] = useState(909);
-  const [terMode, setTerMode] = useState<'2D' | '3D-Heightmap'>('3D-Heightmap');
-  const [terBiome, setTerBiome] = useState<GeneratedTerrainSpec['biome']>('meadow');
-  const [terSpec, setTerSpec] = useState<GeneratedTerrainSpec>(() => generateTerrainSpec(909, '3D-Heightmap', 'meadow'));
-  const terCanvasRef = useRef<HTMLCanvasElement | null>(null);
-
-  // 6. Other Props
+  // 2. Image / Sprite from Text + Other Props
+  const [imgPrompt, setImgPrompt] = useState('Lantern Guardian Crest');
+  const [imgSeed, setImgSeed] = useState(505);
+  const [imgSpec, setImgSpec] = useState(() => generateImageSpriteFromPrompt(505, 'Lantern Guardian Crest', styleId));
+  const imgCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const [propSeed, setPropSeed] = useState(303);
   const [propKind, setPropKind] = useState<GeneratedPropSpec['kind']>('potion');
   const [propSpec, setPropSpec] = useState<GeneratedPropSpec>(() => generatePropAsset(303, 'potion'));
   const [propMsg, setPropMsg] = useState('');
   const propCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
-  // Stop custom music preview on unmount
+  // 3. Music
+  const [musicSeed, setMusicSeed] = useState(120);
+  const [musicScale, setMusicScale] = useState<GeneratedTrackSpec['scale']>('pentatonic');
+  const [musicBpm, setMusicBpm] = useState(128);
+  const [trackSpec, setTrackSpec] = useState<GeneratedTrackSpec>(() => generateMusicTrack(120, 'pentatonic', 128));
+  const [musicPlaying, setMusicPlaying] = useState(false);
+
+  // 4. SFX + Dubbing & Subtitles
+  const [sfxSeed, setSfxSeed] = useState(88);
+  const [sfxPreset, setSfxPreset] = useState<'jump' | 'slash' | 'coin' | 'laser' | 'impact' | 'ui_chime'>('jump');
+  const [sfxSpec, setSfxSpec] = useState<GeneratedSfxSpec>(() => generateSfxSpec(88, 'jump'));
+  const sfxCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [dubSpeaker, setDubSpeaker] = useState('Bowo');
+  const [dubText, setDubText] = useState('Cahaya desa harus kita jaga bersama!');
+  const [dubSpec, setDubSpec] = useState(() => generateDubbingSubtitleSpec(88, 'Bowo', 'Cahaya desa harus kita jaga bersama!', 'id'));
+
+  // 5. Video / Cutscene / Movie Composer
+  const [cutSeed, setCutSeed] = useState(777);
+  const [cutWeather] = useState<WeatherKind>('Cerah');
+  const [moviePrompt, setMoviePrompt] = useState('jalan lompat dash serang');
+  const [cutSpec, setCutSpec] = useState(() => generateCutsceneSpec(777, 'Cerah'));
+  const [cutPlaying, setCutPlaying] = useState(true);
+  const [videoExportMsg, setVideoExportMsg] = useState('');
+  const cutCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // 6. Terrain 2D/3D
+  const [terSeed, setTerSeed] = useState(909);
+  const [terMode, setTerMode] = useState<'2D' | '3D-Heightmap'>('3D-Heightmap');
+  const [terBiome, setTerBiome] = useState<GeneratedTerrainSpec['biome']>('meadow');
+  const [terSpec, setTerSpec] = useState<GeneratedTerrainSpec>(() => generateTerrainSpec(909, '3D-Heightmap', 'meadow'));
+  const terCanvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  // 7. Movement / Behavior State Systems & Complete Playable Game Forge
+  const [fsmKind, setFsmKind] = useState<'movement' | 'behavior'>('movement');
+  const [fsmPrompt, setFsmPrompt] = useState('Agile Guardian Combo');
+  const [fsmSpec, setFsmSpec] = useState(() => generateStateMachineSpec(101, 'movement', 'Agile Guardian Combo'));
+  const [scenePrompt, setScenePrompt] = useState('Isometric Cyber Guardian Co-Op');
+  const [sceneBundle, setSceneBundle] = useState(() => generateGameplaySceneAndRules(202, 'Isometric Cyber Guardian Co-Op'));
+  const [gameBlueprint, setGameBlueprint] = useState<GeneratedGameBlueprintSpec>(() =>
+    generateCompleteGameBlueprint(202, 'Isometric Cyber Guardian Co-Op', activeGitHubRepoId)
+  );
+
+  // 8. Web / APK / MCP / AI Engine Targets
+  const [targetKind, setTargetKind] = useState<GeneratedTargetConfigSpec['target']>('apk');
+  const [targetAppName, setTargetAppName] = useState('Bowo: Penjaga Cahaya');
+  const [targetSpec, setTargetSpec] = useState(() => generatePlatformTargetSpec(303, 'apk', 'Bowo: Penjaga Cahaya'));
+
   useEffect(() => {
     return () => {
       if (musicPlaying) soundEngine.stopTracker();
@@ -134,7 +201,6 @@ export function StudioGeneratorsTab({
         customChar: charSpec,
       });
 
-      // Draw symmetrical 12x12 pixel sprite alongside rig
       const pxOriginX = 215;
       const pxOriginY = 30;
       const cell = 10;
@@ -161,6 +227,61 @@ export function StudioGeneratorsTab({
     rafId = window.requestAnimationFrame(loop);
     return () => window.cancelAnimationFrame(rafId);
   }, [charPose, charSpec, style, styleOverrides, subTab]);
+
+  // Render QolbuSpace3D Low-Poly Mesh Turntable (Tripo3D / Meshy Parity)
+  useEffect(() => {
+    if (subTab !== 'character') return;
+    const canvas = meshCanvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    renderMesh3DPreview(ctx, canvas.width, canvas.height, meshSpec, {
+      yawRad: (meshYawDeg * Math.PI) / 180,
+      pitchRad: 0.08,
+      cameraPreset: meshCam,
+      lod: meshLod,
+      wireframe: meshWireframe,
+    });
+  }, [meshCam, meshLod, meshSpec, meshWireframe, meshYawDeg, subTab]);
+
+  // Draw Text-to-Sprite + Prop previews
+  useEffect(() => {
+    if (subTab !== 'image') return;
+    const c1 = imgCanvasRef.current;
+    if (c1) {
+      const ctx = c1.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#090f1a';
+        ctx.fillRect(0, 0, c1.width, c1.height);
+        const cell = Math.floor(c1.width / 16);
+        for (let r = 0; r < 16; r++) {
+          for (let c = 0; c < 16; c++) {
+            const v = imgSpec.grid[r][c];
+            if (v === 0) continue;
+            ctx.fillStyle = imgSpec.palette[(v - 1) % imgSpec.palette.length];
+            ctx.fillRect(c * cell + 1, r * cell + 1, cell - 1, cell - 1);
+          }
+        }
+      }
+    }
+    const c2 = propCanvasRef.current;
+    if (c2) {
+      const ctx = c2.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(0, 0, c2.width, c2.height);
+        const cell = Math.floor(c2.width / 10);
+        for (let r = 0; r < 10; r++) {
+          for (let c = 0; c < 10; c++) {
+            const v = propSpec.pixelGrid[r][c];
+            if (v === 0) continue;
+            ctx.fillStyle = v === 2 ? propSpec.glowColor : propSpec.primaryColor;
+            ctx.fillRect(c * cell + 2, r * cell + 2, cell - 4, cell - 4);
+          }
+        }
+      }
+    }
+  }, [imgSpec, propSpec, subTab]);
 
   // Draw SFX waveform envelope
   useEffect(() => {
@@ -196,7 +317,7 @@ export function StudioGeneratorsTab({
   useEffect(() => {
     if (subTab !== 'video') return;
     let rafId = 0;
-    let startMs = performance.now();
+    const startMs = performance.now();
     let lastDraw = 0;
     const tick = (now: number) => {
       rafId = window.requestAnimationFrame(tick);
@@ -238,7 +359,6 @@ export function StudioGeneratorsTab({
         ctx.fillRect(0, 0, w, h);
       }
 
-      // Subtitle bar
       ctx.fillStyle = 'rgba(2,6,23,0.82)';
       ctx.fillRect(14, h - 42, w - 28, 28);
       ctx.fillStyle = '#f8fafc';
@@ -267,26 +387,6 @@ export function StudioGeneratorsTab({
       }
     }
   }, [subTab, terSpec]);
-
-  // Draw Prop Asset grid
-  useEffect(() => {
-    if (subTab !== 'props') return;
-    const canvas = propCanvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    ctx.fillStyle = '#0f172a';
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    const cell = Math.floor(canvas.width / 10);
-    for (let r = 0; r < 10; r++) {
-      for (let c = 0; c < 10; c++) {
-        const v = propSpec.pixelGrid[r][c];
-        if (v === 0) continue;
-        ctx.fillStyle = v === 2 ? propSpec.glowColor : propSpec.primaryColor;
-        ctx.fillRect(c * cell + 2, r * cell + 2, cell - 4, cell - 4);
-      }
-    }
-  }, [propSpec, subTab]);
 
   const exportCutsceneVideo = () => {
     const canvas = cutCanvasRef.current;
@@ -323,18 +423,58 @@ export function StudioGeneratorsTab({
     }
   };
 
+  const handleAtelierImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    const text = await f.text();
+    const res = parseAtelierSetupJson(text);
+    if (!res.ok || !res.character) {
+      setAtelierMsg(res.error ?? 'Failed to parse Atelier setup.');
+      return;
+    }
+    setCharSpec(res.character);
+    onApplyCharacter(res.character);
+    setAtelierMsg(`Imported ${res.character.name} (${res.poseCount ?? 0} bone pose entries) & equipped to Bowo!`);
+  };
+
+  const playDubbingPreview = () => {
+    soundEngine.playCustomSfx({
+      seed: dubSpec.seed,
+      name: 'Dubbing Voice',
+      wave: 'triangle',
+      freqStart: dubSpec.pitchHz,
+      freqEnd: Math.round(dubSpec.pitchHz * 1.18),
+      durationSec: 0.24,
+      volume: 0.14,
+    });
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined') {
+      try {
+        window.speechSynthesis.cancel();
+        const utter = new SpeechSynthesisUtterance(dubSpec.text);
+        utter.lang = dubSpec.lang === 'id' ? 'id-ID' : 'en-US';
+        utter.rate = dubSpec.rate;
+        window.speechSynthesis.speak(utter);
+      } catch {
+        // Offline synth fallback already played
+      }
+    }
+  };
+
   return (
     <div className="space-y-4">
-      {/* Sub-navigation across all 6 generators */}
+      {/* Sub-navigation across unified generators */}
       <div className="flex flex-wrap gap-1.5 rounded-xl border border-(--border) bg-(--surface) p-2">
         {(
           [
-            ['character', 'Character 2D/3D'],
-            ['music', 'Music Tracker'],
-            ['sfx', 'SFX Synth'],
-            ['video', 'Video & Cutscene'],
+            ['character', '3D & Character'],
+            ['image', 'Image & Props'],
+            ['music', 'Music'],
+            ['sfx', 'SFX & Dubbing'],
+            ['video', 'Video & Movie'],
             ['terrain', 'Terrain 2D/3D'],
-            ['props', 'Other Assets'],
+            ['systems', 'FSM & Gameplay'],
+            ['targets', 'Web / APK / MCP'],
           ] as const
         ).map(([id, label]) => (
           <button
@@ -344,7 +484,7 @@ export function StudioGeneratorsTab({
               soundEngine.playSfx('ui_tab');
               setSubTab(id);
             }}
-            className={`touch-btn rounded-lg px-3.5 text-xs font-bold transition ${
+            className={`touch-btn rounded-lg px-3 text-xs font-bold transition ${
               subTab === id
                 ? 'bg-(--accent) text-(--accent-ink)'
                 : 'border border-(--border) bg-(--surface-2) text-(--text)'
@@ -355,25 +495,35 @@ export function StudioGeneratorsTab({
         ))}
       </div>
 
-      {/* 1. CHARACTER 2D / 3D GENERATOR */}
+      {/* 1. CHARACTER 2D / 3D + ATELIER RIG GENERATOR */}
       {subTab === 'character' && (
         <section className="grid gap-4 lg:grid-cols-2">
           <div className="rounded-xl border border-(--border) bg-(--surface) p-4">
             <div className="flex items-center justify-between gap-2">
-              <h3 className="text-sm font-extrabold text-(--text)">Character 2D / 3D-Stack Generator</h3>
+              <h3 className="text-sm font-extrabold text-(--text)">Text/Image to 3D Rig &amp; Atelier</h3>
               <button
                 type="button"
                 onClick={() => {
                   soundEngine.playSfx('ui_click');
                   const nextSeed = charSeed + 17;
                   setCharSeed(nextSeed);
-                  setCharSpec(generateCharacter(nextSeed, charDim, charArchetype));
+                  setCharSpec(generateRig3DFromPrompt(nextSeed, charPrompt, atelierPreset).character);
                 }}
                 className="touch-btn inline-flex items-center gap-1.5 rounded-lg bg-(--accent) px-3 text-xs font-extrabold text-(--accent-ink)"
               >
                 <RefreshCw className="h-3.5 w-3.5" />
                 <span>Generate</span>
               </button>
+            </div>
+
+            <div className="mt-2.5 flex gap-2">
+              <input
+                type="text"
+                value={charPrompt}
+                onChange={(e) => setCharPrompt(e.target.value)}
+                placeholder="Prompt e.g. Knight of Light"
+                className="touch-btn flex-1 rounded-xl border border-(--border) bg-(--surface-2) px-3 text-xs font-medium text-(--text)"
+              />
             </div>
 
             <canvas
@@ -387,7 +537,7 @@ export function StudioGeneratorsTab({
               <span className="font-bold text-(--text)">
                 {charSpec.name} ({charSpec.archetype} · {charSpec.dimension})
               </span>
-              <div className="flex gap-1.5">
+              <div className="flex flex-wrap gap-1.5">
                 <button
                   type="button"
                   onClick={() => {
@@ -396,8 +546,12 @@ export function StudioGeneratorsTab({
                   }}
                   className="touch-btn rounded-lg border border-(--border) bg-(--surface-2) px-3 font-bold text-(--text)"
                 >
-                  {customCharacter?.seed === charSpec.seed ? 'Reset to Default Bowo' : 'Apply to Bowo'}
+                  {customCharacter?.seed === charSpec.seed ? 'Reset Default' : 'Apply to Bowo'}
                 </button>
+                <label className="touch-btn flex cursor-pointer items-center rounded-lg border border-(--border) bg-(--surface-2) px-3 font-bold">
+                  <span>Import Atelier JSON</span>
+                  <input type="file" accept=".json,application/json" onChange={handleAtelierImport} className="hidden" />
+                </label>
                 <button
                   type="button"
                   onClick={() => downloadJson(`character_${charSpec.seed}.json`, charSpec)}
@@ -408,10 +562,11 @@ export function StudioGeneratorsTab({
                 </button>
               </div>
             </div>
+            {atelierMsg && <div className="mt-2 text-xs font-semibold text-(--accent)">{atelierMsg}</div>}
           </div>
 
           <div className="space-y-3 rounded-xl border border-(--border) bg-(--surface) p-4 text-xs">
-            <h3 className="text-sm font-extrabold text-(--text)">Rig Dimension, Archetype &amp; Animation State</h3>
+            <h3 className="text-sm font-extrabold text-(--text)">Dimension, Atelier Bone Preset &amp; Poses</h3>
             <div className="grid grid-cols-2 gap-2">
               {(['2D', '3D-Stack'] as const).map((dim) => (
                 <button
@@ -427,6 +582,29 @@ export function StudioGeneratorsTab({
                   }`}
                 >
                   {dim}
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-3 gap-1.5">
+              {([
+                ['warm_eco', 'Warm Eco'],
+                ['mint_agile', 'Mint Agile'],
+                ['cobalt_knight', 'Cobalt'],
+              ] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => {
+                    setAtelierPreset(key);
+                    const res = generateRig3DFromPrompt(charSeed, charPrompt, key);
+                    setCharSpec(res.character);
+                  }}
+                  className={`touch-btn rounded-lg border font-bold ${
+                    atelierPreset === key ? 'border-(--accent) bg-(--accent) text-(--accent-ink)' : 'border-(--border) bg-(--surface-2)'
+                  }`}
+                >
+                  {label}
                 </button>
               ))}
             </div>
@@ -451,7 +629,7 @@ export function StudioGeneratorsTab({
             </div>
 
             <div>
-              <div className="mb-1.5 font-semibold text-(--muted)">Test Animation State</div>
+              <div className="mb-1.5 font-semibold text-(--muted)">Animation State Preview</div>
               <div className="grid grid-cols-4 gap-1.5">
                 {(['idle', 'walk', 'jump', 'fall', 'attack', 'dash', 'hurt', 'ko'] as const).map((pose) => (
                   <button
@@ -471,10 +649,292 @@ export function StudioGeneratorsTab({
               </div>
             </div>
           </div>
+
+          {/* QOLBU SPACE 3D: TRIPO3D / MESHY LOW-POLY MESH GENERATOR (OBJ + GLTF 2.0) */}
+          <div className="rounded-xl border border-(--border) bg-(--surface) p-4 lg:col-span-2 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Box className="h-4 w-4 text-(--accent)" />
+                <div>
+                  <h3 className="text-sm font-extrabold text-(--text)">
+                    3D Mesh Generator (Tripo3D / Meshy Parity · QolbuSpace3D)
+                  </h3>
+                  <p className="text-[11px] text-(--muted)">
+                    Real LookAt+Perspective geometry · {meshSpec.shaderTag} · {meshSpec.atlasBudget}
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  data-testid="generate-3d-mesh-btn"
+                  onClick={() => {
+                    soundEngine.playSfx('ui_click');
+                    const nextSeed = meshSpec.seed + 37;
+                    setMeshSpec(generateMesh3DFromPrompt(nextSeed, meshPrompt, meshArch, meshRepoId, meshBox12));
+                  }}
+                  className="touch-btn inline-flex items-center gap-1.5 rounded-lg bg-(--accent) px-3 font-extrabold text-(--accent-ink)"
+                >
+                  <Sparkles className="h-3.5 w-3.5" />
+                  <span>Generate 3D Mesh</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => downloadText(`${meshSpec.title.replace(/\s+/g, '_')}.obj`, meshSpec.objText, 'text/plain')}
+                  className="touch-btn rounded-lg border border-(--border) bg-(--surface-2) px-3 font-bold"
+                >
+                  Export .OBJ
+                </button>
+                <button
+                  type="button"
+                  data-testid="export-gltf-btn"
+                  onClick={() => downloadText(`${meshSpec.title.replace(/\s+/g, '_')}.gltf`, meshSpec.gltfJson, 'model/gltf+json')}
+                  className="touch-btn rounded-lg border border-(--border) bg-(--surface-2) px-3 font-bold"
+                >
+                  Export .glTF 2.0
+                </button>
+              </div>
+            </div>
+
+            <div className="mt-3 grid gap-4 lg:grid-cols-12">
+              <div className="lg:col-span-6">
+                <canvas
+                  ref={meshCanvasRef}
+                  data-testid="mesh-3d-canvas"
+                  width={440}
+                  height={230}
+                  className="w-full rounded-xl border border-(--border)"
+                />
+                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                  <label className="flex flex-1 items-center gap-2 font-semibold text-(--muted)">
+                    <span>Turntable Yaw</span>
+                    <input
+                      type="range"
+                      min={0}
+                      max={360}
+                      value={meshYawDeg}
+                      onChange={(e) => setMeshYawDeg(Number(e.target.value))}
+                      className="flex-1 accent-(--accent)"
+                    />
+                    <span className="font-mono-num w-10 text-right text-(--text)">{meshYawDeg}°</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => setMeshWireframe((w) => !w)}
+                    className={`touch-btn rounded-lg border px-2.5 font-bold ${
+                      meshWireframe ? 'border-(--accent) bg-(--accent) text-(--accent-ink)' : 'border-(--border) bg-(--surface-2)'
+                    }`}
+                  >
+                    {meshWireframe ? 'Wireframe ON' : 'Shaded'}
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-2.5 lg:col-span-6">
+                <input
+                  type="text"
+                  data-testid="mesh-3d-prompt"
+                  value={meshPrompt}
+                  onChange={(e) => setMeshPrompt(e.target.value)}
+                  placeholder="Describe 3D model: Armored Knight, Crystal Citadel, Hover Racer..."
+                  className="touch-btn w-full rounded-xl border border-(--border) bg-(--surface-2) px-3 text-xs font-medium text-(--text)"
+                />
+
+                <div className="grid grid-cols-5 gap-1.5">
+                  {(['character', 'citadel', 'vehicle', 'crystal', 'prop'] as const).map((arch) => (
+                    <button
+                      key={arch}
+                      type="button"
+                      onClick={() => {
+                        setMeshArch(arch);
+                        setMeshSpec(generateMesh3DFromPrompt(meshSpec.seed, meshPrompt, arch, meshRepoId, meshBox12));
+                      }}
+                      className={`touch-btn rounded-lg border px-1.5 font-bold capitalize ${
+                        meshArch === arch ? 'border-(--accent) bg-(--accent) text-(--accent-ink)' : 'border-(--border) bg-(--surface-2)'
+                      }`}
+                    >
+                      {arch}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-3 gap-1.5">
+                  {CAMERA_3_PRESETS.map((cam) => (
+                    <button
+                      key={cam.id}
+                      type="button"
+                      onClick={() => {
+                        setMeshCam(cam.id);
+                        setCameraPreset?.(cam.id);
+                      }}
+                      className={`touch-btn rounded-lg border px-2 font-bold ${
+                        meshCam === cam.id ? 'border-(--accent) bg-(--accent) text-(--accent-ink)' : 'border-(--border) bg-(--surface-2)'
+                      }`}
+                    >
+                      {cam.shortTag}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex flex-wrap gap-1.5">
+                  {([0, 1, 2] as const).map((lvl) => (
+                    <button
+                      key={lvl}
+                      type="button"
+                      onClick={() => setMeshLod(lvl)}
+                      className={`touch-btn flex-1 rounded-lg border px-2 font-bold ${
+                        meshLod === lvl ? 'border-(--accent) bg-(--accent) text-(--accent-ink)' : 'border-(--border) bg-(--surface-2)'
+                      }`}
+                    >
+                      LOD{lvl} ({lvl === 0 ? meshSpec.lodCounts.lod0 : lvl === 1 ? meshSpec.lodCounts.lod1 : meshSpec.lodCounts.lod2}t)
+                    </button>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextBox = !meshBox12;
+                      setMeshBox12(nextBox);
+                      setMeshSpec(generateMesh3DFromPrompt(meshSpec.seed, meshPrompt, meshArch, meshRepoId, nextBox));
+                    }}
+                    className={`touch-btn rounded-lg border px-2.5 font-bold ${
+                      meshBox12 ? 'border-emerald-400 bg-emerald-500 text-slate-950' : 'border-(--border) bg-(--surface-2)'
+                    }`}
+                  >
+                    12-Tri Box
+                  </button>
+                </div>
+
+                <div className="flex flex-wrap gap-1.5">
+                  {CURATED_GITHUB_PLUGINS.filter((p) => p.category === '3d_mesh_generators').map((rep) => (
+                    <button
+                      key={rep.id}
+                      type="button"
+                      onClick={() => {
+                        setMeshRepoId(rep.id);
+                        setMeshSpec(generateMesh3DFromPrompt(meshSpec.seed, meshPrompt, meshArch, rep.id, meshBox12));
+                      }}
+                      className={`touch-btn rounded-lg border px-2.5 text-[11px] font-bold ${
+                        meshRepoId === rep.id ? 'border-sky-400 bg-sky-500/20 text-sky-300' : 'border-(--border) bg-(--surface-2)'
+                      }`}
+                    >
+                      {rep.repo}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="font-mono-num rounded-xl border border-(--border) bg-slate-950/80 p-2.5 text-[11px] text-emerald-300">
+                  Tris: {meshSpec.triangles.length}/{meshSpec.triBudgetLimit} (A70 Safe) · Verts: {meshSpec.vertices.length} · Est DC: {meshSpec.drawCallsEst} · Blob Shadow: ON
+                </div>
+              </div>
+            </div>
+          </div>
         </section>
       )}
 
-      {/* 2. MUSIC GENERATOR */}
+      {/* 2. IMAGE FROM TEXT & OTHER ASSETS */}
+      {subTab === 'image' && (
+        <section className="grid gap-4 lg:grid-cols-2">
+          <div className="rounded-xl border border-(--border) bg-(--surface) p-4 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-extrabold text-(--text)">Image / Sprite from Text Generator</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = imgSeed + 13;
+                  setImgSeed(next);
+                  setImgSpec(generateImageSpriteFromPrompt(next, imgPrompt, styleId));
+                }}
+                className="touch-btn rounded-lg bg-(--accent) px-3 font-extrabold text-(--accent-ink)"
+              >
+                Generate Sprite
+              </button>
+            </div>
+            <input
+              type="text"
+              value={imgPrompt}
+              onChange={(e) => setImgPrompt(e.target.value)}
+              placeholder="Describe sprite (fire sword, forest slime, cyber shield)"
+              className="touch-btn mt-2.5 w-full rounded-xl border border-(--border) bg-(--surface-2) px-3 text-xs font-medium text-(--text)"
+            />
+            <div className="mt-3 flex items-center gap-4">
+              <canvas ref={imgCanvasRef} width={160} height={160} className="pixel-crisp rounded-xl border border-(--border)" />
+              <div className="space-y-2">
+                <div className="text-sm font-extrabold text-(--text)">{imgSpec.title}</div>
+                <div className="text-(--muted)">16×16 zero-dependency procedural bitmap ({imgSpec.styleId})</div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const rec = assetManager.registerAsset({
+                        id: `sprite_${imgSpec.seed}`,
+                        label: imgSpec.title,
+                        category: 'generated',
+                        levelScope: 0,
+                        estimatedBytes: 14_000,
+                      });
+                      assetManager.loadAsset(rec.id);
+                      setPropMsg(`Registered "${rec.label}" to Asset Manager!`);
+                    }}
+                    className="touch-btn rounded-lg border border-(--border) bg-(--surface-2) px-3 font-bold"
+                  >
+                    Save to Asset Cache
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => downloadJson(`sprite_${imgSpec.seed}.json`, imgSpec)}
+                    className="touch-btn rounded-lg border border-(--border) bg-(--surface-2) px-3 font-bold"
+                  >
+                    JSON
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-(--border) bg-(--surface) p-4 text-xs">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-extrabold text-(--text)">Props &amp; Pickups Generator</h3>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = propSeed + 11;
+                  setPropSeed(next);
+                  setPropSpec(generatePropAsset(next, propKind));
+                }}
+                className="touch-btn rounded-lg bg-(--accent) px-3 font-extrabold text-(--accent-ink)"
+              >
+                Generate Prop
+              </button>
+            </div>
+            <div className="mt-3 flex items-center gap-4">
+              <canvas ref={propCanvasRef} width={140} height={140} className="pixel-crisp rounded-xl border border-(--border)" />
+              <div className="space-y-2">
+                <div className="text-sm font-extrabold text-(--text)">{propSpec.name}</div>
+                <div className="flex flex-wrap gap-1.5">
+                  {(['potion', 'chest', 'crystal', 'torch', 'emblem'] as const).map((k) => (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => {
+                        setPropKind(k);
+                        setPropSpec(generatePropAsset(propSeed, k));
+                      }}
+                      className={`touch-btn rounded-lg border px-2.5 font-bold capitalize ${
+                        propKind === k ? 'border-(--accent) bg-(--accent) text-(--accent-ink)' : 'border-(--border) bg-(--surface-2)'
+                      }`}
+                    >
+                      {k}
+                    </button>
+                  ))}
+                </div>
+                {propMsg && <div className="font-semibold text-(--accent)">{propMsg}</div>}
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {/* 3. MUSIC GENERATOR */}
       {subTab === 'music' && (
         <section className="rounded-xl border border-(--border) bg-(--surface) p-4 text-xs">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -580,7 +1040,7 @@ export function StudioGeneratorsTab({
         </section>
       )}
 
-      {/* 3. SFX GENERATOR */}
+      {/* 4. SFX SYNTH + DUBBING & SUBTITLE GENERATOR */}
       {subTab === 'sfx' && (
         <section className="grid gap-4 lg:grid-cols-2">
           <div className="rounded-xl border border-(--border) bg-(--surface) p-4 text-xs">
@@ -595,24 +1055,8 @@ export function StudioGeneratorsTab({
                 <span>Test SFX</span>
               </button>
             </div>
-            <canvas ref={sfxCanvasRef} width={360} height={130} className="mt-3 w-full rounded-xl border border-(--border)" />
-            <div className="mt-2 flex items-center justify-between text-(--muted)">
-              <span>
-                {sfxSpec.name} · {sfxSpec.wave} · {sfxSpec.freqStart}Hz -&gt; {sfxSpec.freqEnd}Hz
-              </span>
-              <button
-                type="button"
-                onClick={() => downloadJson(`sfx_${sfxSpec.name}.json`, sfxSpec)}
-                className="touch-btn rounded-lg border border-(--border) bg-(--surface-2) px-3 font-bold text-(--text)"
-              >
-                JSON
-              </button>
-            </div>
-          </div>
-
-          <div className="space-y-3 rounded-xl border border-(--border) bg-(--surface) p-4 text-xs">
-            <h3 className="text-sm font-extrabold text-(--text)">Presets &amp; Sweep Tuning</h3>
-            <div className="grid grid-cols-3 gap-1.5">
+            <canvas ref={sfxCanvasRef} width={360} height={110} className="mt-3 w-full rounded-xl border border-(--border)" />
+            <div className="mt-2 grid grid-cols-3 gap-1.5">
               {(['jump', 'slash', 'coin', 'laser', 'impact', 'ui_chime'] as const).map((pre) => (
                 <button
                   key={pre}
@@ -632,45 +1076,71 @@ export function StudioGeneratorsTab({
                 </button>
               ))}
             </div>
-            <label className="block">
-              <div className="mb-1 flex justify-between font-semibold">
-                <span>Start Frequency</span>
-                <span className="font-mono-num">{sfxSpec.freqStart} Hz</span>
-              </div>
+          </div>
+
+          <div className="space-y-3 rounded-xl border border-(--border) bg-(--surface) p-4 text-xs">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-extrabold text-(--text)">Dubbing &amp; Subtitle (SRT / VTT)</h3>
+              <button
+                type="button"
+                onClick={playDubbingPreview}
+                className="touch-btn rounded-lg bg-(--accent) px-3 font-extrabold text-(--accent-ink)"
+              >
+                Speak &amp; Preview
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-2">
               <input
-                type="range"
-                min={80}
-                max={1200}
-                value={sfxSpec.freqStart}
-                onChange={(e) => setSfxSpec({ ...sfxSpec, freqStart: Number(e.target.value) })}
-                className="w-full accent-(--accent)"
+                type="text"
+                value={dubSpeaker}
+                onChange={(e) => {
+                  setDubSpeaker(e.target.value);
+                  setDubSpec(generateDubbingSubtitleSpec(sfxSeed, e.target.value, dubText, 'id'));
+                }}
+                placeholder="Speaker"
+                className="touch-btn rounded-xl border border-(--border) bg-(--surface-2) px-2.5 text-xs font-semibold text-(--text)"
               />
-            </label>
-            <label className="block">
-              <div className="mb-1 flex justify-between font-semibold">
-                <span>End Frequency</span>
-                <span className="font-mono-num">{sfxSpec.freqEnd} Hz</span>
-              </div>
               <input
-                type="range"
-                min={40}
-                max={1400}
-                value={sfxSpec.freqEnd}
-                onChange={(e) => setSfxSpec({ ...sfxSpec, freqEnd: Number(e.target.value) })}
-                className="w-full accent-(--accent)"
+                type="text"
+                value={dubText}
+                onChange={(e) => {
+                  setDubText(e.target.value);
+                  setDubSpec(generateDubbingSubtitleSpec(sfxSeed, dubSpeaker, e.target.value, 'id'));
+                }}
+                placeholder="Dialogue text..."
+                className="touch-btn col-span-2 rounded-xl border border-(--border) bg-(--surface-2) px-2.5 text-xs font-medium text-(--text)"
               />
-            </label>
+            </div>
+            <pre className="font-mono-num whitespace-pre-wrap rounded-xl bg-slate-950 p-3 text-[11px] text-sky-300">
+              {dubSpec.srtText}
+            </pre>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => downloadText(`subtitle_${dubSpec.seed}.srt`, dubSpec.srtText, 'text/plain')}
+                className="touch-btn rounded-lg border border-(--border) bg-(--surface-2) px-3 font-bold"
+              >
+                Export .SRT
+              </button>
+              <button
+                type="button"
+                onClick={() => downloadText(`subtitle_${dubSpec.seed}.vtt`, dubSpec.vttText, 'text/vtt')}
+                className="touch-btn rounded-lg border border-(--border) bg-(--surface-2) px-3 font-bold"
+              >
+                Export .VTT
+              </button>
+            </div>
           </div>
         </section>
       )}
 
-      {/* 4. VIDEO / CUTSCENE & ANIMATION SYSTEM GENERATOR */}
+      {/* 5. VIDEO / CUTSCENE / MOVIE COMPOSER */}
       {subTab === 'video' && (
         <section className="rounded-xl border border-(--border) bg-(--surface) p-4 text-xs">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h3 className="text-sm font-extrabold text-(--text)">Video / Cutscene &amp; Animation State Sequencer</h3>
-              <p className="text-(--muted)">Plays multi-keyframe animation timelines and exports WebM clips or JSON storyboards.</p>
+              <h3 className="text-sm font-extrabold text-(--text)">Video / Cutscene / Movie &amp; Image-to-Video</h3>
+              <p className="text-(--muted)">Compose action timelines from verbs (jalan, lompat, dash, serang) &amp; export WebM or JSON.</p>
             </div>
             <div className="flex flex-wrap gap-2">
               <button
@@ -683,17 +1153,6 @@ export function StudioGeneratorsTab({
               </button>
               <button
                 type="button"
-                onClick={() => {
-                  const next = cutSeed + 19;
-                  setCutSeed(next);
-                  setCutSpec(generateCutsceneSpec(next, cutWeather));
-                }}
-                className="touch-btn rounded-lg border border-(--border) bg-(--surface-2) px-3 font-bold"
-              >
-                New Cutscene
-              </button>
-              <button
-                type="button"
                 onClick={exportCutsceneVideo}
                 className="touch-btn inline-flex items-center gap-1.5 rounded-lg bg-(--accent) px-4 font-extrabold text-(--accent-ink)"
               >
@@ -701,6 +1160,27 @@ export function StudioGeneratorsTab({
                 <span>Export Video</span>
               </button>
             </div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            <input
+              type="text"
+              value={moviePrompt}
+              onChange={(e) => setMoviePrompt(e.target.value)}
+              placeholder="e.g. diam jalan lompat dash serang burst"
+              className="touch-btn flex-1 rounded-xl border border-(--border) bg-(--surface-2) px-3 text-xs font-medium text-(--text)"
+            />
+            <button
+              type="button"
+              onClick={() => {
+                const next = cutSeed + 19;
+                setCutSeed(next);
+                setCutSpec(composeMovieFromPrompt(moviePrompt, next, cutWeather));
+              }}
+              className="touch-btn rounded-xl bg-(--accent) px-4 font-extrabold text-(--accent-ink)"
+            >
+              Compose Movie
+            </button>
           </div>
 
           <canvas ref={cutCanvasRef} width={540} height={220} className="mt-3 w-full rounded-xl border border-(--border)" />
@@ -719,7 +1199,7 @@ export function StudioGeneratorsTab({
         </section>
       )}
 
-      {/* 5. TERRAIN 2D / 3D GENERATOR */}
+      {/* 6. TERRAIN 2D / 3D GENERATOR */}
       {subTab === 'terrain' && (
         <section className="rounded-xl border border-(--border) bg-(--surface) p-4 text-xs">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -787,80 +1267,218 @@ export function StudioGeneratorsTab({
         </section>
       )}
 
-      {/* 6. OTHER ASSETS GENERATOR */}
-      {subTab === 'props' && (
+      {/* 7. MOVEMENT & BEHAVIOR STATE SYSTEM + GAMEPLAY SCENE / UI / PHYSICS GENERATOR */}
+      {subTab === 'systems' && (
         <section className="grid gap-4 lg:grid-cols-2">
-          <div className="rounded-xl border border-(--border) bg-(--surface) p-4 text-xs">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-extrabold text-(--text)">Other Props &amp; Pickup Generator</h3>
+          <div className="space-y-3 rounded-xl border border-(--border) bg-(--surface) p-4 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-sm font-extrabold text-(--text)">Movement &amp; Behavior State Machine</h3>
+              <div className="flex gap-1.5">
+                {(['movement', 'behavior'] as const).map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    onClick={() => {
+                      setFsmKind(k);
+                      setFsmSpec(generateStateMachineSpec(fsmSpec.seed + 7, k, fsmPrompt));
+                    }}
+                    className={`touch-btn rounded-lg border px-3 font-bold capitalize ${
+                      fsmKind === k ? 'border-(--accent) bg-(--accent) text-(--accent-ink)' : 'border-(--border) bg-(--surface-2)'
+                    }`}
+                  >
+                    {k}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={fsmPrompt}
+                onChange={(e) => setFsmPrompt(e.target.value)}
+                className="touch-btn flex-1 rounded-xl border border-(--border) bg-(--surface-2) px-3 text-xs"
+              />
               <button
                 type="button"
+                onClick={() => setFsmSpec(generateStateMachineSpec(fsmSpec.seed + 13, fsmKind, fsmPrompt))}
+                className="touch-btn rounded-xl bg-(--accent) px-3 font-extrabold text-(--accent-ink)"
+              >
+                Build FSM
+              </button>
+            </div>
+            <div className="grid gap-1.5">
+              {fsmSpec.transitions.map((tr, idx) => (
+                <div key={idx} className="flex items-center justify-between rounded-lg bg-(--surface-2) px-3 py-1.5 font-mono-num">
+                  <span className="font-bold text-(--text)">{tr.from}</span>
+                  <span className="text-(--accent)">--[{tr.event}]--&gt;</span>
+                  <span className="font-bold text-emerald-400">{tr.to}</span>
+                </div>
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={() => downloadJson(`fsm_${fsmKind}_${fsmSpec.seed}.json`, fsmSpec)}
+              className="touch-btn rounded-lg border border-(--border) bg-(--surface-2) px-3 font-bold"
+            >
+              Export FSM + Bytecode JSON
+            </button>
+          </div>
+
+          <div className="space-y-3 rounded-xl border border-(--border) bg-(--surface) p-4 text-xs">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-extrabold text-(--text)">Complete Game Forge (InstaPlay / AI Dev Parity)</h3>
+                <p className="text-[11px] text-(--muted)">Prompt -&gt; Playable 3-Level Game + 3 Prefabs + GitHub Stack + QolbuSpace3D</p>
+              </div>
+              <button
+                type="button"
+                data-testid="generate-full-game-btn"
                 onClick={() => {
-                  const next = propSeed + 11;
-                  setPropSeed(next);
-                  setPropSpec(generatePropAsset(next, propKind));
+                  soundEngine.playSfx('ui_click');
+                  const nextSeed = sceneBundle.seed + 29;
+                  setSceneBundle(generateGameplaySceneAndRules(nextSeed, scenePrompt));
+                  setGameBlueprint(generateCompleteGameBlueprint(nextSeed, scenePrompt, activeGitHubRepoId));
                 }}
                 className="touch-btn rounded-lg bg-(--accent) px-3 font-extrabold text-(--accent-ink)"
               >
-                Generate Prop
+                Generate Full Game
               </button>
             </div>
-            <div className="mt-3 flex items-center gap-4">
-              <canvas ref={propCanvasRef} width={160} height={160} className="pixel-crisp rounded-xl border border-(--border)" />
-              <div className="space-y-2">
-                <div className="text-sm font-extrabold text-(--text)">{propSpec.name}</div>
-                <div className="text-(--muted)">Category: {propSpec.kind} · 10x10 compact bitmap</div>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const rec = assetManager.registerAsset({
-                        id: `gen_${propSpec.kind}_${propSpec.seed}`,
-                        label: propSpec.name,
-                        category: 'generated',
-                        levelScope: 0,
-                        estimatedBytes: 12_000,
-                      });
-                      assetManager.loadAsset(rec.id);
-                      setPropMsg(`Registered & loaded "${rec.label}" in Asset Manager!`);
-                    }}
-                    className="touch-btn rounded-lg border border-(--border) bg-(--surface-2) px-3 font-bold"
-                  >
-                    Register to Asset Manager
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => downloadJson(`prop_${propSpec.seed}.json`, propSpec)}
-                    className="touch-btn rounded-lg border border-(--border) bg-(--surface-2) px-3 font-bold"
-                  >
-                    JSON
-                  </button>
-                </div>
-                {propMsg && <div className="font-semibold text-(--accent)">{propMsg}</div>}
-              </div>
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-(--border) bg-(--surface) p-4 text-xs">
-            <h3 className="text-sm font-extrabold text-(--text)">Select Asset Archetype</h3>
-            <div className="mt-3 grid grid-cols-3 gap-2">
-              {(['potion', 'chest', 'crystal', 'torch', 'emblem'] as const).map((k) => (
+            <input
+              type="text"
+              data-testid="full-game-prompt"
+              value={scenePrompt}
+              onChange={(e) => setScenePrompt(e.target.value)}
+              placeholder="e.g. Isometric Cyber RPG, FPS Raycast Dungeon, Mode-7 Turbo Race, Space Danmaku"
+              className="touch-btn w-full rounded-xl border border-(--border) bg-(--surface-2) px-3 text-xs"
+            />
+            <div className="flex flex-wrap gap-1.5">
+              {[
+                'Isometric Cyber RPG',
+                'FPS Raycast Dungeon',
+                'Mode-7 Turbo Race',
+                'Space Danmaku Co-Op',
+                'Hex Tactical Bastion',
+              ].map((pre) => (
                 <button
-                  key={k}
+                  key={pre}
                   type="button"
                   onClick={() => {
-                    setPropKind(k);
-                    setPropSpec(generatePropAsset(propSeed, k));
+                    setScenePrompt(pre);
+                    setSceneBundle(generateGameplaySceneAndRules(sceneBundle.seed + 7, pre));
+                    setGameBlueprint(generateCompleteGameBlueprint(gameBlueprint.seed + 7, pre, activeGitHubRepoId));
                   }}
-                  className={`touch-btn rounded-xl border font-bold capitalize ${
-                    propKind === k ? 'border-(--accent) bg-(--accent) text-(--accent-ink)' : 'border-(--border) bg-(--surface-2)'
-                  }`}
+                  className="touch-btn rounded-lg border border-(--border) bg-(--surface-2) px-2.5 text-[11px] font-bold"
                 >
-                  {k}
+                  {pre}
                 </button>
               ))}
             </div>
+            <div className="rounded-xl border border-(--border) bg-(--surface-2) p-3 space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-extrabold text-(--text)">{gameBlueprint.title}</span>
+                <span className="font-mono-num text-[10px] font-bold text-emerald-400">
+                  {gameBlueprint.budgetReport.targetFps} FPS · {gameBlueprint.budgetReport.drawCallsEst} DC · {gameBlueprint.budgetReport.trisEst} tris
+                </span>
+              </div>
+              <div className="font-mono-num text-(--muted)">
+                Genre: {gameBlueprint.genreId} ({gameBlueprint.simKind}) · {gameBlueprint.hybridMode} · {gameBlueprint.cameraPreset} · AI: {gameBlueprint.aiMode}
+              </div>
+              <div className="font-mono-num text-[11px] text-sky-300">
+                GitHub Stack: {gameBlueprint.repoStack.join(' + ')}
+              </div>
+              <div className="grid gap-1 pt-1 sm:grid-cols-3">
+                {gameBlueprint.prefabs.map((pf) => (
+                  <div key={pf.name} className="rounded-lg bg-slate-950/75 p-1.5 text-[10px]">
+                    <div className="font-bold text-(--text)">{pf.name}</div>
+                    <div className="font-mono-num text-(--muted)">{pf.triCount} tris · {pf.collider}</div>
+                  </div>
+                ))}
+              </div>
+              <div className="pt-1 space-y-0.5">
+                {gameBlueprint.rules.map((r, i) => (
+                  <div key={i} className="font-mono-num text-[11px] text-emerald-300">
+                    WHEN {r.condition} -&gt; THEN {r.action}
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {onLaunchBlueprint && (
+                <button
+                  type="button"
+                  data-testid="launch-generated-game-btn"
+                  onClick={() => {
+                    soundEngine.playSfx('ui_click');
+                    onLaunchBlueprint(gameBlueprint);
+                  }}
+                  className="touch-btn inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-emerald-500 px-3 font-extrabold text-slate-950 hover:bg-emerald-400"
+                >
+                  <Play className="h-3.5 w-3.5 fill-current" />
+                  <span>Build &amp; Play Generated Game</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => downloadJson(`game_blueprint_${gameBlueprint.seed}.json`, gameBlueprint)}
+                className="touch-btn rounded-lg border border-(--border) bg-(--surface-2) px-3 font-bold"
+              >
+                Export Blueprint JSON
+              </button>
+            </div>
           </div>
+        </section>
+      )}
+
+      {/* 8. WEB / APK / MCP / AI ENGINE TARGET GENERATOR */}
+      {subTab === 'targets' && (
+        <section className="rounded-xl border border-(--border) bg-(--surface) p-4 text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-extrabold text-(--text)">Web / Android APK / MCP / AI Engine Generator</h3>
+              <p className="text-(--muted)">Generate production-ready manifests for Web PWA, Android APK (Itel A70), MCP server, or AI Engine core.</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => downloadText(`${targetSpec.packageId}-${targetSpec.target}.json`, targetSpec.configJson)}
+              className="touch-btn inline-flex items-center gap-1.5 rounded-lg bg-(--accent) px-4 font-extrabold text-(--accent-ink)"
+            >
+              <Download className="h-3.5 w-3.5" />
+              <span>Download Config</span>
+            </button>
+          </div>
+
+          <div className="mt-3 flex flex-wrap gap-2">
+            {(['apk', 'web', 'mcp', 'ai_engine'] as const).map((tg) => (
+              <button
+                key={tg}
+                type="button"
+                onClick={() => {
+                  setTargetKind(tg);
+                  setTargetSpec(generatePlatformTargetSpec(targetSpec.seed + 1, tg, targetAppName));
+                }}
+                className={`touch-btn rounded-lg border px-3 font-bold uppercase ${
+                  targetKind === tg ? 'border-(--accent) bg-(--accent) text-(--accent-ink)' : 'border-(--border) bg-(--surface-2)'
+                }`}
+              >
+                {tg.replace('_', ' ')}
+              </button>
+            ))}
+            <input
+              type="text"
+              value={targetAppName}
+              onChange={(e) => {
+                setTargetAppName(e.target.value);
+                setTargetSpec(generatePlatformTargetSpec(targetSpec.seed, targetKind, e.target.value));
+              }}
+              className="touch-btn flex-1 rounded-xl border border-(--border) bg-(--surface-2) px-3 text-xs font-medium"
+            />
+          </div>
+
+          <div className="mt-2 font-semibold text-(--accent)">{targetSpec.summary}</div>
+          <pre className="font-mono-num mt-2 max-h-64 overflow-auto rounded-xl bg-slate-950 p-3 text-[11px] text-emerald-300">
+            {targetSpec.configJson}
+          </pre>
         </section>
       )}
     </div>

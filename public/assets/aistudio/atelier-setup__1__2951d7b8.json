@@ -1,0 +1,20 @@
+{
+  "app": "CharacterAtelier",
+  "version": 2,
+  "settings": {
+    "characterId": "atelier",
+    "tint": "#ffd09e",
+    "style": "original",
+    "roughness": 0.4,
+    "sx": 1,
+    "sy": 1,
+    "sz": 1,
+    "volume": 0,
+    "wire": false,
+    "flat": false,
+    "quality": "eco",
+    "clip": "rest",
+    "bones": {},
+    "poses": []
+  }
+}

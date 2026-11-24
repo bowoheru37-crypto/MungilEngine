@@ -12,6 +12,7 @@ import {
 import {
   API_REFERENCE_EXAMPLES,
   ENGINE_DOCS_SECTIONS,
+  GENERATOR_TOP3_REPOS,
   REPO_CREDITS,
   SANDBOX_SKUS,
   THIRD_PARTY_NOTICES_TEXT,
@@ -23,6 +24,8 @@ import { LANGUAGE_NAMES } from '../engine/i18n';
 import {
   buildSavePayload,
   deleteSlotLocal,
+  importSaveJsonToSlot,
+  listSaveSlots,
   loadSlotLocal,
   parseAndMigrateSave,
   saveSlotLocal,
@@ -37,6 +40,7 @@ import type {
   LanguageCode,
   PaymentSku,
   PerformanceGateResult,
+  SaveSlotId,
 } from '../engine/types';
 
 interface StudioLabTabProps {
@@ -432,6 +436,24 @@ export function StudioLabTab({
             </div>
           ))}
         </div>
+
+        <div className="mt-4 border-t border-(--border) pt-3">
+          <h4 className="text-xs font-extrabold text-(--text)">Top-3 Curated Generator &amp; AI/APK/MCP Domain Matrix</h4>
+          <div className="mt-2 grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
+            {GENERATOR_TOP3_REPOS.map((grp) => (
+              <div key={grp.group} className="rounded-xl border border-(--border) bg-(--surface-2) p-3 text-xs">
+                <div className="font-extrabold text-(--accent)">{grp.group}</div>
+                <ul className="mt-1.5 space-y-1 text-[11px] text-(--muted)">
+                  {grp.repos.map((rp) => (
+                    <li key={rp.name}>
+                      <span className="font-bold text-(--text)">{rp.name}</span> ({rp.license}) — {rp.pattern}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
       </section>
     </div>
   );
@@ -449,6 +471,10 @@ interface StudioServicesTabProps {
   analyticsEnabled: boolean;
   setAnalyticsEnabled: (v: boolean) => void;
   onApplyLoadedSave: (level: 1 | 2 | 3, coins: number, score: number, potions: number) => void;
+  onSaveProgress?: (slotId: SaveSlotId) => { ok: boolean; bytes: number; level: 1 | 2 | 3 };
+  onLoadProgress?: (slotId: SaveSlotId, launchImmediately?: boolean) => { ok: boolean; level?: 1 | 2 | 3; score?: number; migrated?: boolean; checksumValid?: boolean };
+  onDeleteSaveSlot?: (slotId: SaveSlotId) => void;
+  saveRevision?: number;
   onAddBonusCoinsPotions: (coins: number, potions: number) => void;
   isOnline: boolean;
 }
@@ -465,16 +491,36 @@ export function StudioServicesTab({
   analyticsEnabled,
   setAnalyticsEnabled,
   onApplyLoadedSave,
+  onSaveProgress,
+  onLoadProgress,
+  onDeleteSaveSlot,
+  saveRevision = 0,
   onAddBonusCoinsPotions,
   isOnline,
 }: StudioServicesTabProps) {
-  const [slot, setSlot] = useState<1 | 2 | 3>(1);
-  const [saveMessage, setSaveMessage] = useState('Local offline slots ready with FNV checksum & v6.1 migration.');
+  const [slot, setSlot] = useState<SaveSlotId>(1);
+  const [localRev, setLocalRev] = useState(0);
+  const [saveMessage, setSaveMessage] = useState('Local offline slots ready with FNV-1a checksum & v6.1 migration (< 1 KB per slot).');
   const [skus, setSkus] = useState<PaymentSku[]>(SANDBOX_SKUS);
   const [notifyStatus, setNotifyStatus] = useState('Push notification permission idle.');
 
+  void saveRevision;
+  void localRev;
+  const slots = listSaveSlots();
+  const activeSummary = slots.find((s) => s.id === slot);
+
   const handleSaveSlot = () => {
-    const payload = buildSavePayload(slot, {
+    if (onSaveProgress) {
+      const res = onSaveProgress(slot);
+      setLocalRev((r) => r + 1);
+      setSaveMessage(
+        `Saved ${slot === 'auto' ? 'Auto-Save' : `Slot ${slot}`} (Level ${res.level}, ${res.bytes} B) · ${
+          isOnline ? 'Synced' : 'Saved offline'
+        }`
+      );
+      return;
+    }
+    const payload = buildSavePayload(slot === 'auto' ? 1 : slot, {
       gameTitle: gameName,
       level: hud.level,
       hp: hud.hp || 100,
@@ -486,15 +532,27 @@ export function StudioServicesTab({
       potions: hud.potions,
       styleId,
     });
-    saveSlotLocal(payload);
+    const saved = saveSlotLocal(payload, slot);
+    setLocalRev((r) => r + 1);
     setSaveMessage(
-      `Saved Slot ${slot} (v${payload.version}, checksum ${payload.checksum}) · ${
-        isOnline ? 'Synced' : 'Queued offline'
-      }`
+      `Saved ${slot === 'auto' ? 'Auto-Save' : `Slot ${slot}`} (${saved.bytes} B, checksum ${payload.checksum})`
     );
   };
 
-  const handleLoadSlot = () => {
+  const handleLoadSlot = (launch = false) => {
+    if (onLoadProgress) {
+      const res = onLoadProgress(slot, launch);
+      if (!res.ok) {
+        setSaveMessage(`${slot === 'auto' ? 'Auto-Save' : `Slot ${slot}`} is empty.`);
+        return;
+      }
+      setSaveMessage(
+        `Loaded ${slot === 'auto' ? 'Auto-Save' : `Slot ${slot}`}: Level ${res.level}, Score ${res.score}, Checksum ${
+          res.checksumValid ? 'VALID' : 'CLAMPED'
+        }${res.migrated ? ' (Migrated from v6.1)' : ''}`
+      );
+      return;
+    }
     const loaded = loadSlotLocal(slot);
     if (!loaded) {
       setSaveMessage(`Slot ${slot} is empty.`);
@@ -517,11 +575,42 @@ export function StudioServicesTab({
       shards: 3,
       score: 640,
     });
-    const res = parseAndMigrateSave(legacyRaw, slot);
-    saveSlotLocal(res.data);
+    const res = parseAndMigrateSave(legacyRaw, slot === 'auto' ? 1 : slot);
+    saveSlotLocal(res.data, slot);
+    setLocalRev((r) => r + 1);
     setSaveMessage(
-      `Migrated v6.1.0 -> v${res.data.version} into Slot ${slot} (tampered hp=420 clamped to ${res.data.hp}, coins=12500 clamped to ${res.data.coins}).`
+      `Migrated v6.1.0 -> v${res.data.version} into ${slot === 'auto' ? 'Auto' : `Slot ${slot}`} (hp=420 -> ${res.data.hp}, coins=12500 -> ${res.data.coins}).`
     );
+  };
+
+  const handleExportSlotJson = () => {
+    const loaded = loadSlotLocal(slot);
+    if (!loaded) {
+      setSaveMessage('Select a non-empty slot to export.');
+      return;
+    }
+    const blob = new Blob([JSON.stringify(loaded.data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `bowo-save-${slot}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    setSaveMessage(`Exported bowo-save-${slot}.json (${loaded.bytes} B).`);
+  };
+
+  const handleImportSlotFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const text = await file.text();
+    const res = importSaveJsonToSlot(text, slot);
+    setLocalRev((r) => r + 1);
+    if (!res.ok) {
+      setSaveMessage(res.error ?? 'Failed to import save JSON.');
+      return;
+    }
+    setSaveMessage(`Imported JSON into ${slot === 'auto' ? 'Auto' : `Slot ${slot}`} (${res.summary?.bytes ?? 0} B).`);
   };
 
   const handleTriggerNotification = async () => {
@@ -545,32 +634,48 @@ export function StudioServicesTab({
 
   return (
     <div className="grid gap-4 lg:grid-cols-2">
-      {/* Cloud / Offline 3-Slot Save */}
+      {/* Cloud / Offline 3-Slot + Auto Save */}
       <section className="rounded-xl border border-(--border) bg-(--surface) p-4 text-xs">
-        <h3 className="text-sm font-extrabold text-(--text)">Offline-First Cloud Save (Slots 1–3 · v7.0.0)</h3>
-        <p className="mt-0.5 text-(--muted)">FNV-1a checksum verification, tamper bounds clamping, and automatic v6.1 migration.</p>
+        <h3 className="text-sm font-extrabold text-(--text)">Offline Save &amp; Load Manager (Slots 1–3 + Auto)</h3>
+        <p className="mt-0.5 text-(--muted)">Saves full world state (&lt;1 KB), FNV-1a checksum verification, tamper bounds clamping, and v6.1 migration.</p>
 
-        <div className="mt-3 flex gap-2">
-          {([1, 2, 3] as const).map((s) => (
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {slots.map((s) => (
             <button
-              key={s}
+              key={String(s.id)}
               type="button"
-              onClick={() => setSlot(s)}
-              className={`touch-btn flex-1 rounded-xl border font-bold ${
-                slot === s ? 'border-(--accent) bg-(--accent) text-(--accent-ink)' : 'border-(--border) bg-(--surface-2)'
+              onClick={() => setSlot(s.id)}
+              className={`touch-btn flex flex-col items-start rounded-xl border p-2 text-left transition ${
+                slot === s.id ? 'border-(--accent) bg-(--accent) text-(--accent-ink)' : 'border-(--border) bg-(--surface-2) text-(--text)'
               }`}
             >
-              Slot {s}
+              <span className="font-extrabold">{s.id === 'auto' ? 'Auto-Save' : `Slot ${s.id}`}</span>
+              <span className={`font-mono-num text-[10px] ${slot === s.id ? 'opacity-90' : 'text-(--muted)'}`}>
+                {s.exists ? `L${s.level} · HP ${s.hp} · ${s.score}pts · ${s.bytes}B` : 'Empty'}
+              </span>
             </button>
           ))}
         </div>
 
-        <div className="mt-2.5 grid grid-cols-2 gap-2 sm:grid-cols-4">
+        <div className="mt-2.5 grid grid-cols-2 gap-2 sm:grid-cols-3">
           <button type="button" onClick={handleSaveSlot} className="touch-btn rounded-xl bg-(--accent) font-bold text-(--accent-ink)">
-            Save Slot
+            Save Current
           </button>
-          <button type="button" onClick={handleLoadSlot} className="touch-btn rounded-xl border border-(--border) bg-(--surface-2) font-bold">
-            Load Slot
+          <button
+            type="button"
+            disabled={!activeSummary?.exists}
+            onClick={() => handleLoadSlot(true)}
+            className="touch-btn rounded-xl border border-emerald-500/50 bg-emerald-500/15 font-bold text-emerald-300 disabled:opacity-40"
+          >
+            Load &amp; Play
+          </button>
+          <button
+            type="button"
+            disabled={!activeSummary?.exists}
+            onClick={() => handleLoadSlot(false)}
+            className="touch-btn rounded-xl border border-(--border) bg-(--surface-2) font-bold disabled:opacity-40"
+          >
+            Load State
           </button>
           <button
             type="button"
@@ -581,17 +686,35 @@ export function StudioServicesTab({
           </button>
           <button
             type="button"
+            disabled={!activeSummary?.exists}
+            onClick={handleExportSlotJson}
+            className="touch-btn inline-flex items-center justify-center gap-1 rounded-xl border border-(--border) bg-(--surface-2) font-bold disabled:opacity-40"
+          >
+            <Download className="h-3.5 w-3.5" />
+            <span>Export JSON</span>
+          </button>
+          <label className="touch-btn flex cursor-pointer items-center justify-center rounded-xl border border-(--border) bg-(--surface-2) font-bold hover:border-(--accent)">
+            <span>Import JSON</span>
+            <input type="file" accept=".json,application/json" onChange={handleImportSlotFile} className="hidden" />
+          </label>
+        </div>
+
+        <div className="mt-2 flex items-center justify-between gap-2">
+          <div className="flex-1 rounded-xl bg-(--surface-2) p-2.5 font-medium text-(--text)">{saveMessage}</div>
+          <button
+            type="button"
+            disabled={!activeSummary?.exists}
             onClick={() => {
-              deleteSlotLocal(slot);
-              setSaveMessage(`Slot ${slot} deleted.`);
+              if (onDeleteSaveSlot) onDeleteSaveSlot(slot);
+              else deleteSlotLocal(slot);
+              setLocalRev((r) => r + 1);
+              setSaveMessage(`${slot === 'auto' ? 'Auto-Save' : `Slot ${slot}`} deleted.`);
             }}
-            className="touch-btn rounded-xl border border-rose-500/40 bg-rose-500/10 font-bold text-rose-400"
+            className="touch-btn rounded-xl border border-rose-500/40 bg-rose-500/10 px-3 font-bold text-rose-400 disabled:opacity-40"
           >
             Delete
           </button>
         </div>
-
-        <div className="mt-3 rounded-xl bg-(--surface-2) p-2.5 font-medium text-(--text)">{saveMessage}</div>
       </section>
 
       {/* Auth, Language & Push Notifications */}
