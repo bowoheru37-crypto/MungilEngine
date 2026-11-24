@@ -5,26 +5,34 @@ import { soundEngine } from '../engine/audio';
 import { t } from '../engine/i18n';
 import type {
   AnalyticsSummary,
+  ArenaMode,
   ArtStyleId,
   AuthProfile,
+  CollisionShapeSpec,
   DeviceProfile,
   DeviceTierId,
+  EventSheetRule,
   GeneratedCharacterSpec,
   GenreTemplate,
   HudSnapshot,
   LanguageCode,
   PhysicsMode,
   RenderMode,
+  SceneEntityNode,
   StudioTab,
   StyleOverrides,
   TouchControlConfig,
   WeatherKind,
+  WizardGameSpec,
 } from '../engine/types';
 import { PWAInstallButton } from './PWAInstallButton';
-import { StudioControlsTab, StudioArtTab } from './StudioControlsArtTabs';
+import { StudioAgentMcpTab } from './StudioAgentMcpTab';
+import { StudioArenaAiTab } from './StudioArenaAiTab';
+import { StudioArtTab, StudioControlsTab } from './StudioControlsArtTabs';
 import { StudioGeneratorsTab } from './StudioGeneratorsTab';
 import { StudioExportTab, StudioLabTab, StudioServicesTab } from './StudioLabServicesExportTabs';
 import { StudioAssetsTab, StudioPlayTab } from './StudioPlayAssetsTabs';
+import { StudioSceneTab } from './StudioSceneTab';
 import { StudioSkillsTab } from './StudioSkillsTab';
 
 class TabErrorBoundary extends Component<{ children: ReactNode; tabName: string }, { hasError: boolean }> {
@@ -95,10 +103,23 @@ interface StudioWorkspaceProps {
   analytics: AnalyticsSummary;
   analyticsEnabled: boolean;
   setAnalyticsEnabled: (v: boolean) => void;
+  eventRules: EventSheetRule[];
+  setEventRules: (updater: EventSheetRule[] | ((prev: EventSheetRule[]) => EventSheetRule[])) => void;
   hud: HudSnapshot;
   isOnline: boolean;
   customCharacter: GeneratedCharacterSpec | null;
   setCustomCharacter: (c: GeneratedCharacterSpec | null) => void;
+  sceneEntities: SceneEntityNode[];
+  setSceneEntities: (updater: SceneEntityNode[] | ((prev: SceneEntityNode[]) => SceneEntityNode[])) => void;
+  collisionShapes: CollisionShapeSpec[];
+  setCollisionShapes: (updater: CollisionShapeSpec[] | ((prev: CollisionShapeSpec[]) => CollisionShapeSpec[])) => void;
+  myGames: WizardGameSpec[];
+  setMyGames: (updater: WizardGameSpec[] | ((prev: WizardGameSpec[]) => WizardGameSpec[])) => void;
+  activeArenaSpec: WizardGameSpec | null;
+  forcedArenaMode?: ArenaMode;
+  mcpLogs: string[];
+  onExecuteMcpTool: (toolId: string) => void;
+  onPlayWizardGame: (game: WizardGameSpec) => void;
   onBackToLanding: () => void;
   onBackToTitle: () => void;
   onLaunchGame: (lvl?: 1 | 2 | 3, genre?: GenreTemplate) => void;
@@ -111,6 +132,9 @@ export function StudioWorkspace(props: StudioWorkspaceProps) {
 
   const tabs: Array<{ id: StudioTab; label: string }> = [
     { id: 'play', label: tr.tabs.play },
+    { id: 'scene', label: tr.tabs.scene },
+    { id: 'agent', label: tr.tabs.agent },
+    { id: 'arena', label: tr.tabs.arena },
     { id: 'assets', label: tr.tabs.assets },
     { id: 'generators', label: tr.tabs.generators },
     { id: 'controls', label: tr.tabs.controls },
@@ -227,6 +251,31 @@ export function StudioWorkspace(props: StudioWorkspaceProps) {
             />
           )}
 
+          {props.activeTab === 'scene' && (
+            <StudioSceneTab
+              entities={props.sceneEntities}
+              setEntities={props.setSceneEntities}
+              shapes={props.collisionShapes}
+              setShapes={props.setCollisionShapes}
+            />
+          )}
+
+          {props.activeTab === 'agent' && (
+            <StudioAgentMcpTab
+              hud={props.hud}
+              myGames={props.myGames}
+              setMyGames={props.setMyGames}
+              mcpLogs={props.mcpLogs}
+              onExecuteMcpTool={props.onExecuteMcpTool}
+              onNavigateTab={props.setActiveTab}
+              onPlayWizardGame={props.onPlayWizardGame}
+            />
+          )}
+
+          {props.activeTab === 'arena' && (
+            <StudioArenaAiTab activeSpec={props.activeArenaSpec} forcedMode={props.forcedArenaMode} />
+          )}
+
           {props.activeTab === 'assets' && (
             <StudioAssetsTab
               styleId={props.styleId}
@@ -276,6 +325,9 @@ export function StudioWorkspace(props: StudioWorkspaceProps) {
               gameName={props.gameName}
               styleId={props.styleId}
               buttonSize={props.touchConfig.buttonSize}
+              deviceProfile={props.deviceProfile}
+              eventRules={props.eventRules}
+              setEventRules={props.setEventRules}
               hud={props.hud}
             />
           )}

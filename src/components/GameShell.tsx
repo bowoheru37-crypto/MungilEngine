@@ -32,6 +32,7 @@ import type {
   ArtStyleId,
   CharacterAnimState,
   DeviceProfile,
+  EventSheetRule,
   GameShellState,
   GeneratedCharacterSpec,
   HudSnapshot,
@@ -76,6 +77,8 @@ interface GameShellProps {
   onOpenStudio: () => void;
   onBackToLanding?: () => void;
   customCharacter?: GeneratedCharacterSpec | null;
+  eventRules?: EventSheetRule[];
+  onAutoSaveLocal?: () => void;
   onRecordAnalytics: (evt: { killsDelta: number; parriesDelta: number; clearedDelta: number; fps: number }) => void;
   worldRefExternal: React.MutableRefObject<GameWorld | null>;
 }
@@ -112,6 +115,8 @@ export function GameShell({
   onOpenStudio,
   onBackToLanding,
   customCharacter,
+  eventRules,
+  onAutoSaveLocal,
   onRecordAnalytics,
   worldRefExternal,
 }: GameShellProps) {
@@ -151,6 +156,7 @@ export function GameShell({
     touchConfig,
     reduceShake,
     customCharacter,
+    eventRules,
   });
   configRef.current = {
     shellState,
@@ -169,18 +175,21 @@ export function GameShell({
     touchConfig,
     reduceShake,
     customCharacter,
+    eventRules,
   };
 
   const callbacksRef = useRef({
     setShellState,
     setActiveLevel,
     onHudChange,
+    onAutoSaveLocal,
     onRecordAnalytics,
   });
   callbacksRef.current = {
     setShellState,
     setActiveLevel,
     onHudChange,
+    onAutoSaveLocal,
     onRecordAnalytics,
   };
 
@@ -456,6 +465,8 @@ export function GameShell({
             practiceMode: cfg.practiceMode,
             speedMul: cfg.speedMul,
             gravityMul: cfg.gravityMul,
+            ecoAi15Hz: cfg.deviceProfile.activeTier === 'eco',
+            eventRules: cfg.eventRules,
           };
 
           const events = stepGameWorld(world, input, fixedStep, simCfg, 620);
@@ -494,15 +505,18 @@ export function GameShell({
               const nextLvl = (world.level + 1) as 1 | 2 | 3;
               soundEngine.playSfx('gate');
               callbacksRef.current.onRecordAnalytics({ killsDelta: 0, parriesDelta: 0, clearedDelta: 1, fps: Math.round(1000 / emaFrameMs) });
+              callbacksRef.current.onAutoSaveLocal?.();
               initOrResetLevel(nextLvl, true);
               soundEngine.startTracker(nextLvl);
               break;
             } else if (ev.type === 'victory') {
               soundEngine.stopTracker();
+              callbacksRef.current.onAutoSaveLocal?.();
               callbacksRef.current.onRecordAnalytics({ killsDelta: 0, parriesDelta: 0, clearedDelta: 1, fps: Math.round(1000 / emaFrameMs) });
               callbacksRef.current.setShellState('victory');
             } else if (ev.type === 'gameover') {
               soundEngine.stopTracker();
+              callbacksRef.current.onAutoSaveLocal?.();
               callbacksRef.current.setShellState('gameover');
             }
           }
@@ -1508,9 +1522,9 @@ function renderGameScene(
     drawCalls += 1;
   }
 
-  // Bowo Player (8-state 2D / 3D-Stack animated rig)
+  // Bowo Player (8-state table-driven FSM + 2-bone damped cloak spring)
   const pl = world.player;
-  const pose: CharacterAnimState =
+  const pose: CharacterAnimState = world.playerPose ?? (
     pl.koTimer > 0
       ? 'ko'
       : pl.flash > 0.08
@@ -1525,7 +1539,8 @@ function renderGameScene(
                 : 'jump'
               : Math.abs(pl.vx) > 20
                 ? 'walk'
-                : 'idle';
+                : 'idle'
+  );
 
   if (sim === 'collector') {
     ctx.strokeStyle = 'rgba(250,204,21,0.35)';
@@ -1547,6 +1562,7 @@ function renderGameScene(
     flash: pl.flash,
     comboStep: pl.comboCount,
     rig3d: opts.renderMode === '3D Ringan' || opts.customCharacter?.dimension === '3D-Stack',
+    spring: world.cloakSpring,
     customChar: opts.customCharacter ?? undefined,
     overrides: opts.overrides,
   });

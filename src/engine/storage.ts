@@ -1,10 +1,16 @@
 import { computeChecksum } from './bytecode';
+import { DEFAULT_COLLISION_SHAPES, DEFAULT_SCENE_ENTITIES } from './scenePhysics';
+import { STARTER_WIZARD_GAMES } from './qolbuAgent';
 import type {
   AnalyticsSummary,
   ArtStyleId,
   AuthProfile,
+  CollisionShapeSpec,
+  EventSheetRule,
   SaveSlotData,
+  SceneEntityNode,
   TouchControlConfig,
+  WizardGameSpec,
 } from './types';
 
 const SAVE_KEY_PREFIX = 'mungil_v7_save_slot_';
@@ -13,6 +19,15 @@ const ANALYTICS_KEY = 'mungil_v7_analytics';
 const AUTH_KEY = 'mungil_v7_auth';
 const PIXEL_ART_KEY = 'mungil_v7_pixel_art';
 const TILEMAP_KEY = 'mungil_v7_tilemap';
+const EVENT_RULES_KEY = 'mungil_v7_event_rules';
+const MY_GAMES_KEY = 'mungil_v7_my_games';
+const SCENE_ENTITIES_KEY = 'mungil_v7_scene_entities';
+const COLLISION_SHAPES_KEY = 'mungil_v7_collision_shapes';
+
+export const DEFAULT_EVENT_RULES: EventSheetRule[] = [
+  { id: 'ev1', enabled: true, condition: 'ON_SHARD_COLLECT', action: 'ADD_SCORE_25' },
+  { id: 'ev2', enabled: true, condition: 'ON_LOW_HP', action: 'HEAL_15' },
+];
 
 export const DEFAULT_TOUCH_CONFIG: TouchControlConfig = {
   joystickSide: 'left',
@@ -292,3 +307,71 @@ export function loadTilemap(): number[][] {
 export function saveTilemap(map: number[][]): void {
   safeSetItem(TILEMAP_KEY, JSON.stringify(map));
 }
+
+export function loadEventRules(): EventSheetRule[] {
+  const raw = safeGetItem(EVENT_RULES_KEY);
+  if (!raw) return DEFAULT_EVENT_RULES;
+  try {
+    const parsed = JSON.parse(raw) as EventSheetRule[];
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed;
+    }
+  } catch {
+    // ignore
+  }
+  return DEFAULT_EVENT_RULES;
+}
+
+export function saveEventRules(rules: EventSheetRule[]): void {
+  safeSetItem(EVENT_RULES_KEY, JSON.stringify(rules));
+}
+
+export function loadWizardGames(): WizardGameSpec[] {
+  const raw = safeGetItem(MY_GAMES_KEY);
+  if (!raw) return STARTER_WIZARD_GAMES;
+  try {
+    const parsed = JSON.parse(raw) as WizardGameSpec[];
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+  } catch {
+    // ignore
+  }
+  return STARTER_WIZARD_GAMES;
+}
+
+export function saveWizardGames(games: WizardGameSpec[]): void {
+  safeSetItem(MY_GAMES_KEY, JSON.stringify(games));
+}
+
+export function loadSceneEntities(): SceneEntityNode[] {
+  const raw = safeGetItem(SCENE_ENTITIES_KEY);
+  if (!raw) return DEFAULT_SCENE_ENTITIES;
+  try {
+    const parsed = JSON.parse(raw) as SceneEntityNode[];
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+  } catch {
+    // ignore
+  }
+  return DEFAULT_SCENE_ENTITIES;
+}
+
+export function saveSceneEntities(entities: SceneEntityNode[]): void {
+  safeSetItem(SCENE_ENTITIES_KEY, JSON.stringify(entities));
+}
+
+export function loadCollisionShapes(): CollisionShapeSpec[] {
+  const raw = safeGetItem(COLLISION_SHAPES_KEY);
+  if (!raw) return DEFAULT_COLLISION_SHAPES;
+  try {
+    const parsed = JSON.parse(raw) as CollisionShapeSpec[];
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+  } catch {
+    // ignore
+  }
+  return DEFAULT_COLLISION_SHAPES;
+}
+
+export function saveCollisionShapes(shapes: CollisionShapeSpec[]): void {
+  safeSetItem(COLLISION_SHAPES_KEY, JSON.stringify(shapes));
+}
+
+

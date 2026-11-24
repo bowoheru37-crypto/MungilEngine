@@ -18,6 +18,7 @@ import {
 } from '../engine/catalogs';
 import { getHeapMb } from '../engine/deviceProfiler';
 import { SoAWorld } from '../engine/ecs';
+import { ENGINE_LAYERS, evaluateHardenedRules } from '../engine/engineCore';
 import { LANGUAGE_NAMES } from '../engine/i18n';
 import {
   buildSavePayload,
@@ -30,6 +31,7 @@ import type {
   AnalyticsSummary,
   ArtStyleId,
   AuthProfile,
+  DeviceProfile,
   EventSheetRule,
   HudSnapshot,
   LanguageCode,
@@ -41,21 +43,28 @@ interface StudioLabTabProps {
   gameName: string;
   styleId: ArtStyleId;
   buttonSize: number;
+  deviceProfile: DeviceProfile;
+  eventRules: EventSheetRule[];
+  setEventRules: (updater: EventSheetRule[] | ((prev: EventSheetRule[]) => EventSheetRule[])) => void;
   hud: HudSnapshot;
 }
 
-export function StudioLabTab({ gameName, styleId, buttonSize, hud }: StudioLabTabProps) {
+export function StudioLabTab({
+  gameName,
+  styleId,
+  buttonSize,
+  deviceProfile,
+  eventRules: events,
+  setEventRules: setEvents,
+  hud,
+}: StudioLabTabProps) {
   const [scriptText, setScriptText] = useState('SET 10\nADD 5\nSAY 1\nSPAWN 2\nPLAY 1\nEND');
   const [vmOutput, setVmOutput] = useState<string>('Ready to compile 16-bit short[] bytecode.');
   const [bytecodeValid, setBytecodeValid] = useState(true);
 
   const [seedInput, setSeedInput] = useState(7070);
   const [seedWorld, setSeedWorld] = useState(() => generateSeedWorld(7070));
-
-  const [events, setEvents] = useState<EventSheetRule[]>([
-    { id: 'ev1', enabled: true, condition: 'ON_SHARD_COLLECT', action: 'ADD_SCORE_25' },
-    { id: 'ev2', enabled: true, condition: 'ON_LOW_HP', action: 'HEAL_15' },
-  ]);
+  const [selectedLayerIdx, setSelectedLayerIdx] = useState<number>(0);
 
   const [repoTier, setRepoTier] = useState<'A' | 'B' | 'C'>('A');
 
@@ -128,6 +137,17 @@ export function StudioLabTab({ gameName, styleId, buttonSize, hud }: StudioLabTa
   });
 
   const passedCount = checks.filter((c) => c.passed).length;
+  const heapMb = getHeapMb();
+  const hardenedRules = evaluateHardenedRules(deviceProfile, {
+    simMs: 2.1,
+    renderMs: 6.4,
+    frameMs: 1000 / Math.max(15, hud.fps),
+    drawCalls: hud.drawCalls,
+    culledCount: hud.culledCount ?? 0,
+    heapMb,
+    aiHz: deviceProfile.activeTier === 'eco' ? 15 : deviceProfile.targetFps,
+  });
+  const activeLayer = ENGINE_LAYERS[selectedLayerIdx] ?? ENGINE_LAYERS[0];
 
   return (
     <div className="space-y-5">
@@ -304,6 +324,74 @@ export function StudioLabTab({ gameName, styleId, buttonSize, hud }: StudioLabTa
               <div className="mt-0.5 truncate text-(--muted)">{c.detail}</div>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* FD Lite v2 & Qolbu Hardened 7-Layer Architecture Inspector */}
+      <section className="rounded-xl border border-(--border) bg-(--surface) p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-extrabold text-(--text)">
+              7-Layer Unified Engine &amp; 9 Hardened Rules (FD Lite v2 · Qolbu Core)
+            </h3>
+            <p className="text-xs text-(--muted)">
+              Pipeline: Input -&gt; FSM Table -&gt; Bone Spring Pose -&gt; Culled 1-Batch Render -&gt; VSync Present.
+            </p>
+          </div>
+          <span className="font-mono-num text-xs font-bold text-emerald-400">
+            {hardenedRules.filter((r) => r.status === 'pass').length}/9 Rules Pass
+          </span>
+        </div>
+
+        <div className="mt-3 grid gap-2 sm:grid-cols-3 lg:grid-cols-5">
+          {hardenedRules.map((rule) => (
+            <div key={rule.code} className="rounded-lg border border-(--border) bg-(--surface-2) p-2 text-[11px]">
+              <div className="flex items-center justify-between font-bold">
+                <span className="font-mono-num text-(--text)">{rule.code}</span>
+                <span className={rule.status === 'pass' ? 'text-emerald-400' : 'text-amber-400'}>
+                  {rule.status.toUpperCase()}
+                </span>
+              </div>
+              <div className="mt-0.5 truncate font-medium text-(--text)">{rule.title}</div>
+              <div className="font-mono-num truncate text-(--muted)">{rule.metric}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-4 flex flex-wrap gap-1.5">
+          {ENGINE_LAYERS.map((layer) => (
+            <button
+              key={layer.id}
+              type="button"
+              onClick={() => setSelectedLayerIdx(layer.layer)}
+              className={`touch-btn rounded-lg border px-3 text-xs font-bold ${
+                selectedLayerIdx === layer.layer
+                  ? 'border-(--accent) bg-(--accent) text-(--accent-ink)'
+                  : 'border-(--border) bg-(--surface-2) text-(--text)'
+              }`}
+            >
+              L{layer.layer} · {layer.id}
+            </button>
+          ))}
+        </div>
+
+        <div className="mt-3 rounded-xl border border-(--border) bg-(--surface-2) p-3.5 text-xs">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="font-extrabold text-(--text)">{activeLayer.title}</div>
+            <div className="font-mono-num text-[11px] font-bold text-(--accent)">{activeLayer.itelA70Budget}</div>
+          </div>
+          <p className="mt-1 text-(--muted)">{activeLayer.subtitle}</p>
+          <p className="mt-1 font-medium text-(--text)">Mobile Strategy: {activeLayer.mobileStrategy}</p>
+          <div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {activeLayer.systems.map((sys) => (
+              <div key={sys.code} className="rounded-lg border border-(--border) bg-(--surface) p-2.5">
+                <div className="font-mono-num font-bold text-(--accent)">
+                  {sys.code} · {sys.name}
+                </div>
+                <div className="mt-0.5 text-[11px] text-(--muted)">{sys.detail}</div>
+              </div>
+            ))}
+          </div>
         </div>
       </section>
 
@@ -660,6 +748,8 @@ interface StudioExportTabProps {
 
 export function StudioExportTab({ gameName, styleId, hud }: StudioExportTabProps) {
   const [pakStats, setPakStats] = useState<string>('Ready to compress project bundle into MPAK7 RLE binary.');
+  const [apkTab, setApkTab] = useState<'manifest' | 'gradle' | 'proguard' | 'props'>('manifest');
+  const [copiedApk, setCopiedApk] = useState(false);
 
   const triggerDownload = (filename: string, content: BlobPart, mime: string) => {
     const blob = new Blob([content], { type: mime });
@@ -720,6 +810,70 @@ export function StudioExportTab({ gameName, styleId, hud }: StudioExportTabProps
     triggerDownload('mungil-v7-bundle.pak', packed.bytes as unknown as BlobPart, 'application/octet-stream');
   };
 
+  const safeAppName = gameName.replace(/[<>&"]/g, '');
+  const apkFiles = {
+    manifest: `<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <uses-permission android:name="android.permission.VIBRATE" />
+  <application
+    android:label="${safeAppName}"
+    android:allowBackup="false"
+    android:hardwareAccelerated="true"
+    android:theme="@style/Theme.MungilFullscreen">
+    <activity
+      android:name=".MainActivity"
+      android:exported="true"
+      android:screenOrientation="sensorLandscape"
+      android:configChanges="orientation|screenSize|keyboardHidden">
+      <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+      </intent-filter>
+    </activity>
+  </application>
+</manifest>`,
+    gradle: `plugins {
+  id("com.android.application")
+  id("org.jetbrains.kotlin.android")
+}
+
+android {
+  namespace = "id.mungil.qolbu"
+  compileSdk = 35
+  defaultConfig {
+    applicationId = "id.mungil.qolbu"
+    minSdk = 24
+    targetSdk = 35
+    versionCode = 700
+    versionName = "7.0.0"
+    ndk { abiFilters += listOf("armeabi-v7a", "arm64-v8a") }
+  }
+  buildTypes {
+    release {
+      isMinifyEnabled = true
+      isShrinkResources = true
+      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+    }
+  }
+}`,
+    proguard: `-keep class id.mungil.qolbu.** { *; }
+-dontwarn android.webkit.**
+-assumenosideeffects class android.util.Log {
+  public static int d(...);
+  public static int v(...);
+}`,
+    props: `org.gradle.jvmargs=-Xmx1536m -Dfile.encoding=UTF-8
+android.useAndroidX=true
+android.nonTransitiveRClass=true
+kotlin.code.style=official`,
+  };
+
+  const deprecatedReplacements = [
+    ['AsyncTask', 'Kotlin Coroutines / Web Worker'],
+    ['SYSTEM_UI_FLAG_FULLSCREEN', 'WindowInsetsControllerCompat (AndroidX)'],
+    ['startActivityForResult', 'ActivityResultContracts'],
+    ['android:allowBackup="true"', 'EncryptedSharedPreferences / FNV Checksum Save'],
+  ];
+
   return (
     <div className="space-y-5">
       {/* Industry Export Center */}
@@ -757,6 +911,68 @@ export function StudioExportTab({ gameName, styleId, hud }: StudioExportTabProps
         </div>
 
         <div className="font-mono-num mt-3 rounded-xl bg-(--surface-2) p-3 text-xs text-(--text)">{pakStats}</div>
+      </section>
+
+      {/* Android APK Build Pack (Config Bundle for Android Studio / Gradle) */}
+      <section className="space-y-3 rounded-xl border border-(--border) bg-(--surface) p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h3 className="text-sm font-extrabold text-(--text)">Android APK Build Pack (Itel A70 · SDK 24–35)</h3>
+            <p className="text-xs text-(--muted)">
+              Menghasilkan file konfigurasi build pack siap pakai untuk Android Studio / Gradle (bukan kompilasi biner .apk langsung di browser).
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              void navigator.clipboard?.writeText(apkFiles[apkTab]);
+              setCopiedApk(true);
+              window.setTimeout(() => setCopiedApk(false), 1800);
+            }}
+            className="touch-btn rounded-xl bg-(--accent) px-3.5 text-xs font-extrabold text-(--accent-ink)"
+          >
+            {copiedApk ? 'Disalin!' : 'Copy File Ini'}
+          </button>
+        </div>
+
+        <div className="flex flex-wrap gap-1.5">
+          {(
+            [
+              ['manifest', 'AndroidManifest.xml'],
+              ['gradle', 'build.gradle.kts'],
+              ['proguard', 'proguard-rules.pro'],
+              ['props', 'gradle.properties'],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setApkTab(id)}
+              className={`touch-btn rounded-lg border px-3 text-xs font-bold ${
+                apkTab === id ? 'border-(--accent) bg-(--accent) text-(--accent-ink)' : 'border-(--border) bg-(--surface-2)'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <pre className="font-mono-num max-h-56 overflow-auto rounded-xl bg-slate-950 p-3 text-[11px] text-sky-300">
+          {apkFiles[apkTab]}
+        </pre>
+
+        <div className="rounded-xl border border-(--border) bg-(--surface-2) p-3 text-xs">
+          <div className="font-extrabold text-(--text)">Tabel Pengganti API Deprecated -&gt; AndroidX Modern:</div>
+          <div className="mt-2 grid gap-1.5 sm:grid-cols-2">
+            {deprecatedReplacements.map(([oldApi, modern]) => (
+              <div key={oldApi} className="rounded-lg border border-(--border) bg-(--surface) px-2.5 py-1.5 text-[11px]">
+                <span className="font-mono-num text-rose-400 line-through">{oldApi}</span>{' '}
+                <span className="text-(--muted)">-&gt;</span>{' '}
+                <span className="font-semibold text-emerald-400">{modern}</span>
+              </div>
+            ))}
+          </div>
+        </div>
       </section>
 
       {/* Engine API Reference & Docs */}

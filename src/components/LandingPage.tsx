@@ -248,6 +248,36 @@ export function LandingPage({
                 <button
                   type="button"
                   onClick={() => {
+                    soundEngine.playSfx('ui_tab');
+                    onOpenStudioTab('agent');
+                  }}
+                  className="touch-btn rounded-xl border border-(--accent)/50 bg-(--accent)/10 px-3 py-2 font-bold text-(--text) hover:border-(--accent)"
+                >
+                  Qolbu AI &amp; MCP
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playSfx('ui_tab');
+                    onOpenStudioTab('arena');
+                  }}
+                  className="touch-btn rounded-xl border border-(--border) bg-(--surface) px-3 py-2 font-semibold text-(--text) hover:border-(--accent)"
+                >
+                  Arena AI
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playSfx('ui_tab');
+                    onOpenStudioTab('scene');
+                  }}
+                  className="touch-btn rounded-xl border border-(--border) bg-(--surface) px-3 py-2 font-semibold text-(--text) hover:border-(--accent)"
+                >
+                  Scene &amp; Collider
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
                     soundEngine.playSfx('ui_click');
                     onOpenTitleStage();
                   }}

@@ -10,6 +10,10 @@ export interface Translations {
   installApp: string;
   offlineBadge: string;
   onlineBadge: string;
+  offlineToastTitle: string;
+  offlineToastBody: string;
+  backOnlineToast: string;
+  dismissLabel: string;
   titleHint: string;
   pausedTitle: string;
   victoryTitle: string;
@@ -29,11 +33,14 @@ export interface Translations {
   practiceMode: string;
   tabs: {
     play: string;
+    scene: string;
     assets: string;
     generators: string;
     controls: string;
     art: string;
     lab: string;
+    agent: string;
+    arena: string;
     skills: string;
     services: string;
     export: string;
@@ -58,6 +65,10 @@ const ID: Translations = {
   installApp: 'Pasang Aplikasi (PWA)',
   offlineBadge: 'Offline Siap',
   onlineBadge: 'Online',
+  offlineToastTitle: 'Offline Mode',
+  offlineToastBody: 'Koneksi terputus — progres permainan tetap disimpan secara lokal.',
+  backOnlineToast: 'Kembali Online — penyimpanan lokal siap disinkronkan.',
+  dismissLabel: 'Tutup',
   titleHint: 'WASD/Panah gerak · Spasi lompat · J serang · K dash/parry · L burst · Esc jeda',
   pausedTitle: 'Permainan Dijeda',
   victoryTitle: 'Cahaya Kembali!',
@@ -77,14 +88,17 @@ const ID: Translations = {
   practiceMode: 'Mode Latihan',
   tabs: {
     play: 'Main',
+    scene: 'Scene & Physics',
     assets: 'Aset',
     generators: 'Generator',
     controls: 'Kontrol',
     art: '12 Style',
     lab: 'Engine Lab',
+    agent: 'Agen AI & MCP',
+    arena: 'Arena AI',
     skills: 'AI Skills',
     services: 'Layanan',
-    export: 'Ekspor & Docs',
+    export: 'Ekspor & APK',
   },
   actions: {
     jump: 'Lompat',
@@ -106,6 +120,10 @@ const EN: Translations = {
   installApp: 'Install App (PWA)',
   offlineBadge: 'Offline Ready',
   onlineBadge: 'Online',
+  offlineToastTitle: 'Offline Mode',
+  offlineToastBody: 'Network connection lost — progress is being saved locally.',
+  backOnlineToast: 'Back Online — local saves are ready.',
+  dismissLabel: 'Dismiss',
   titleHint: 'WASD/Arrows move · Space jump · J attack · K dash/parry · L burst · Esc pause',
   pausedTitle: 'Game Paused',
   victoryTitle: 'Light Restored!',
@@ -125,14 +143,17 @@ const EN: Translations = {
   practiceMode: 'Practice Mode',
   tabs: {
     play: 'Play',
+    scene: 'Scene & Physics',
     assets: 'Assets',
     generators: 'Generators',
     controls: 'Controls',
     art: '12 Styles',
     lab: 'Engine Lab',
+    agent: 'AI Agent & MCP',
+    arena: 'AI Arena',
     skills: 'AI Skills',
     services: 'Services',
-    export: 'Export & Docs',
+    export: 'Export & APK',
   },
   actions: {
     jump: 'Jump',
@@ -152,6 +173,10 @@ const JA: Translations = {
   openStudio: 'エンジンスタジオ',
   controlsBtn: 'タッチ操作設定',
   installApp: 'アプリをインストール',
+  offlineToastTitle: 'Offline Mode',
+  offlineToastBody: 'オフラインモード — 進行状況はローカルに保存されています。',
+  backOnlineToast: 'オンラインに復帰しました。',
+  dismissLabel: '閉じる',
   pausedTitle: '一時停止中',
   victoryTitle: '光が戻った！',
   gameOverTitle: 'ゲームオーバー',
@@ -173,6 +198,10 @@ const KO: Translations = {
   openStudio: '엔진 스튜디오',
   controlsBtn: '터치 컨트롤',
   installApp: '앱 설치 (PWA)',
+  offlineToastTitle: 'Offline Mode',
+  offlineToastBody: '오프라인 모드 — 진행 상황이 로컬에 저장되고 있습니다.',
+  backOnlineToast: '다시 온라인 상태입니다.',
+  dismissLabel: '닫기',
   pausedTitle: '일시 정지',
   victoryTitle: '빛이 돌아왔다!',
   gameOverTitle: '게임 오버',
@@ -194,6 +223,10 @@ const ES: Translations = {
   openStudio: 'Estudio Motor',
   controlsBtn: 'Controles Táctiles',
   installApp: 'Instalar App (PWA)',
+  offlineToastTitle: 'Offline Mode',
+  offlineToastBody: 'Sin conexión — tu progreso se está guardando localmente.',
+  backOnlineToast: 'Conexión restaurada.',
+  dismissLabel: 'Cerrar',
   pausedTitle: 'Juego en Pausa',
   victoryTitle: '¡Luz Restaurada!',
   gameOverTitle: 'Derrota',

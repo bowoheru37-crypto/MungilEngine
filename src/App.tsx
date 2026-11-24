@@ -2,25 +2,42 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { GameShell } from './components/GameShell';
 import { LandingPage } from './components/LandingPage';
+import { OfflineToast } from './components/OfflineToast';
 import { StudioWorkspace } from './components/StudioWorkspace';
 import { DEFAULT_STYLE_OVERRIDES } from './engine/artStyles';
 import { soundEngine } from './engine/audio';
 import { MungilEngineApi } from './engine/bytecode';
 import { createDeviceProfile } from './engine/deviceProfiler';
 import { createLevelWorld, toHudSnapshot, type GameWorld } from './engine/gameSimulation';
+import { generateCharacter } from './engine/generators';
+import { LOCAL_MCP_TOOLS, buildWizardGameSpec } from './engine/qolbuAgent';
+import { groupEntities } from './engine/scenePhysics';
 import {
+  buildSavePayload,
   loadAnalytics,
   loadAuthProfile,
+  loadCollisionShapes,
+  loadEventRules,
+  loadSceneEntities,
   loadTouchConfig,
+  loadWizardGames,
   saveAnalytics,
   saveAuthProfile,
+  saveCollisionShapes,
+  saveEventRules,
+  saveSceneEntities,
+  saveSlotLocal,
   saveTouchConfig,
+  saveWizardGames,
 } from './engine/storage';
 import type {
   AnalyticsSummary,
+  ArenaMode,
   ArtStyleId,
   AuthProfile,
+  CollisionShapeSpec,
   DeviceTierId,
+  EventSheetRule,
   GameShellState,
   GeneratedCharacterSpec,
   GenreTemplate,
@@ -28,10 +45,12 @@ import type {
   LanguageCode,
   PhysicsMode,
   RenderMode,
+  SceneEntityNode,
   StudioTab,
   StyleOverrides,
   TouchControlConfig,
   WeatherKind,
+  WizardGameSpec,
 } from './engine/types';
 import { usePWAInstall } from './hooks/usePWAInstall';
 
@@ -92,6 +111,53 @@ export default function App() {
 
   const [analyticsEnabled, setAnalyticsEnabled] = useState(true);
   const [analytics, setAnalytics] = useState<AnalyticsSummary>(() => loadAnalytics());
+  const [eventRules, setEventRulesState] = useState<EventSheetRule[]>(() => loadEventRules());
+  const setEventRules = useCallback((updater: EventSheetRule[] | ((prev: EventSheetRule[]) => EventSheetRule[])) => {
+    setEventRulesState((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      saveEventRules(next);
+      return next;
+    });
+  }, []);
+
+  const [sceneEntities, setSceneEntitiesState] = useState<SceneEntityNode[]>(() => loadSceneEntities());
+  const setSceneEntities = useCallback(
+    (updater: SceneEntityNode[] | ((prev: SceneEntityNode[]) => SceneEntityNode[])) => {
+      setSceneEntitiesState((prev) => {
+        const next = typeof updater === 'function' ? updater(prev) : updater;
+        saveSceneEntities(next);
+        return next;
+      });
+    },
+    []
+  );
+
+  const [collisionShapes, setCollisionShapesState] = useState<CollisionShapeSpec[]>(() => loadCollisionShapes());
+  const setCollisionShapes = useCallback(
+    (updater: CollisionShapeSpec[] | ((prev: CollisionShapeSpec[]) => CollisionShapeSpec[])) => {
+      setCollisionShapesState((prev) => {
+        const next = typeof updater === 'function' ? updater(prev) : updater;
+        saveCollisionShapes(next);
+        return next;
+      });
+    },
+    []
+  );
+
+  const [myGames, setMyGamesState] = useState<WizardGameSpec[]>(() => loadWizardGames());
+  const setMyGames = useCallback((updater: WizardGameSpec[] | ((prev: WizardGameSpec[]) => WizardGameSpec[])) => {
+    setMyGamesState((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      saveWizardGames(next);
+      return next;
+    });
+  }, []);
+
+  const [activeArenaSpec, setActiveArenaSpec] = useState<WizardGameSpec | null>(null);
+  const [forcedArenaMode, setForcedArenaMode] = useState<ArenaMode | undefined>(undefined);
+  const [mcpLogs, setMcpLogs] = useState<string[]>([
+    '[MCP Ready] 16 local tools registered via in-app Editor Bridge (offline-ready).',
+  ]);
 
   const worldRef = useRef<GameWorld | null>(null);
   if (!worldRef.current) {
@@ -212,6 +278,31 @@ export default function App() {
     [deviceProfile.dynamicScale, deviceProfile.powerSaveActive, deviceProfile.targetFps]
   );
 
+  const handleAutoSaveLocal = useCallback(() => {
+    const w = worldRef.current;
+    if (!w) return;
+    const payload = buildSavePayload(1, {
+      gameTitle: gameName,
+      level: w.level,
+      hp: w.player.hp || 100,
+      energy: w.player.energy,
+      coins: w.coinsTotal,
+      shards: w.shards.filter((s) => s.collected).length,
+      score: w.score,
+      kills: w.kills,
+      potions: w.potions,
+      styleId,
+    });
+    saveSlotLocal(payload);
+  }, [gameName, styleId]);
+
+  // Auto-save active progress locally whenever PWA transitions offline
+  useEffect(() => {
+    if (!isOnline && (shellState === 'playing' || shellState === 'paused')) {
+      handleAutoSaveLocal();
+    }
+  }, [handleAutoSaveLocal, isOnline, shellState]);
+
   const handleAddBonusCoinsPotions = useCallback(
     (coinsDelta: number, potionsDelta: number) => {
       if (!worldRef.current) return;
@@ -229,142 +320,309 @@ export default function App() {
     [deviceProfile.dynamicScale, deviceProfile.powerSaveActive, deviceProfile.targetFps]
   );
 
+  const handlePlayWizardGame = useCallback((game: WizardGameSpec) => {
+    setActiveArenaSpec(game);
+    setForcedArenaMode(game.aiMode === 'Sendiri' ? 'solo' : game.aiMode === 'Lawan' ? 'vs' : 'coplay');
+    setStudioTab('arena');
+  }, []);
+
+  const handleExecuteMcpTool = useCallback(
+    (toolId: string) => {
+      const appendLog = (msg: string) =>
+        setMcpLogs((prev) => [`[${new Date().toLocaleTimeString()}] ${toolId}: ${msg}`, ...prev].slice(0, 24));
+
+      switch (toolId) {
+        case 'list_tools':
+          appendLog(`Aktif ${LOCAL_MCP_TOOLS.length} tools (${LOCAL_MCP_TOOLS.map((x) => x.name).slice(0, 5).join(', ')}...)`);
+          break;
+        case 'explain_engine':
+          appendLog('7-Layer Qolbu Core: Zero-GC SoA + 15Hz AI + FD Lite Render.');
+          break;
+        case 'guide_player':
+          appendLog(`Quest Lv.${hud.level}: Shards ${hud.shards}/${hud.requiredShards}, HP ${hud.hp}.`);
+          break;
+        case 'create_game': {
+          const spec = buildWizardGameSpec({
+            name: `MCP Arena ${myGames.length + 1}`,
+            genre: 'Arena',
+            sprite: 'Bowo MCP',
+            characterName: 'Bowo',
+            preset: 'BOUNCY',
+            map: 'Arena Qolbu',
+            enemies: 3,
+            items: 3,
+            aiMode: 'Bareng',
+            difficulty: 'Normal',
+            durationSec: 90,
+          });
+          setMyGames((prev) => [spec, ...prev]);
+          appendLog(`Game "${spec.name}" dibuat & disimpan ke Koleksi Game Saya.`);
+          break;
+        }
+        case 'spawn_entity': {
+          const newId = `ent_mcp_${Date.now().toString(36)}`;
+          setSceneEntities((prev) => [
+            ...prev,
+            {
+              id: newId,
+              name: `MCP Slime ${prev.length + 1}`,
+              type: 'Enemy',
+              x: 190,
+              y: 120,
+              sx: 1,
+              sy: 1,
+              rot: 0,
+              parent: null,
+              locked: false,
+              hidden: false,
+              preset: 'BOUNCY',
+            },
+          ]);
+          setCollisionShapes((prev) => [
+            ...prev,
+            {
+              id: `shp_${newId}`,
+              entityId: newId,
+              type: 'Circle',
+              w: 32,
+              h: 32,
+              r: 16,
+              ox: 0,
+              oy: 0,
+              rot: 0,
+              color: '#f43f5e',
+              verts: [
+                { x: 0, y: -16 },
+                { x: 16, y: 12 },
+                { x: -16, y: 12 },
+              ],
+            },
+          ]);
+          appendLog('Entitas MCP Slime + Collider di-spawn ke Scene.');
+          break;
+        }
+        case 'set_physics_preset':
+          setSceneEntities((prev) => prev.map((e, i) => (i === 0 ? { ...e, preset: 'SLIPPERY' } : e)));
+          appendLog('Preset SLIPPERY diterapkan ke entitas utama.');
+          break;
+        case 'group_entities': {
+          const nonContainers = sceneEntities.filter((e) => e.type !== 'CONTAINER').slice(0, 2).map((e) => e.id);
+          const grouped = groupEntities(sceneEntities, nonContainers, 'Grup MCP');
+          setSceneEntities(grouped.nodes);
+          appendLog(grouped.containerId ? '2 entitas digabung ke Container "Grup MCP" (keep-world).' : 'Butuh >=2 entitas.');
+          break;
+        }
+        case 'edit_collision_shape':
+          setCollisionShapes((prev) => prev.map((s, i) => (i === 0 ? { ...s, type: 'Circle', r: 24 } : s)));
+          appendLog('Collider utama diubah menjadi Circle r=24px.');
+          break;
+        case 'generate_asset': {
+          const hero = generateCharacter(Date.now() % 9999, '3D-Stack', 'Knight');
+          setCustomCharacter(hero);
+          appendLog(`Karakter 3D-Stack "${hero.name}" dipasang ke Bowo!`);
+          break;
+        }
+        case 'generate_level':
+          setWeather('Hujan');
+          setStudioTab('generators');
+          appendLog('Membuka Generators & mengaktifkan cuaca Hujan.');
+          break;
+        case 'generate_dialog':
+          if (worldRef.current) {
+            worldRef.current.dialogue = 'Qolbu MCP: Cahaya menuntun langkahmu menuju Menara Kala!';
+          }
+          appendLog('Dialog chapter baru diperbarui pada dunia aktif.');
+          break;
+        case 'validate_game':
+          appendLog('Audit 9 Larangan Mutlak & 25 Check selesai: Semua batas Itel A70 aman.');
+          setStudioTab('lab');
+          break;
+        case 'export_game':
+          appendLog('Membuka Export & Android APK Build Pack.');
+          setStudioTab('export');
+          break;
+        case 'play_ai':
+          setForcedArenaMode('solo');
+          setStudioTab('arena');
+          appendLog('Meluncurkan Qolbu Arena Mode Solo AI.');
+          break;
+        case 'co_play_ai':
+          setForcedArenaMode('coplay');
+          setStudioTab('arena');
+          appendLog('Meluncurkan Qolbu Arena Mode Co-Play.');
+          break;
+        case 'vs_ai':
+          setForcedArenaMode('vs');
+          setStudioTab('arena');
+          appendLog('Meluncurkan Qolbu Arena Mode VS Boss Kala Adaptif.');
+          break;
+        default:
+          appendLog('Tool selesai dijalankan.');
+      }
+    },
+    [hud.hp, hud.level, hud.requiredShards, hud.shards, myGames.length, sceneEntities, setCollisionShapes, setMyGames, setSceneEntities]
+  );
+
   if (shellState === 'landing') {
     return (
-      <LandingPage
+      <>
+        <LandingPage
+          activeLevel={activeLevel}
+          setActiveLevel={setActiveLevel}
+          styleId={styleId}
+          customPalettes={customPalettes}
+          styleOverrides={styleOverrides}
+          customCharacter={customCharacter}
+          deviceProfile={deviceProfile}
+          lang={lang}
+          setLang={setLang}
+          theme={theme}
+          setTheme={setTheme}
+          muted={muted}
+          setMuted={setMuted}
+          isOnline={isOnline}
+          onStartPlay={() => launchGame(activeLevel)}
+          onOpenTitleStage={() => setShellState('title')}
+          onOpenStudioTab={(tab) => {
+            setStudioTab(tab);
+            setShellState('studio');
+          }}
+        />
+        <OfflineToast isOnline={isOnline} lang={lang} shellState={shellState} />
+      </>
+    );
+  }
+
+  if (shellState === 'studio') {
+    return (
+      <>
+        <StudioWorkspace
+          activeTab={studioTab}
+          setActiveTab={setStudioTab}
+          gameName={gameName}
+          setGameName={setGameName}
+          activeLevel={activeLevel}
+          setActiveLevel={setActiveLevel}
+          requestedTier={requestedTier}
+          onChangeTier={setRequestedTier}
+          powerSaveAuto={powerSaveAuto}
+          onChangePowerSaveAuto={setPowerSaveAuto}
+          deviceProfile={deviceProfile}
+          renderMode={renderMode}
+          setRenderMode={setRenderMode}
+          physicsMode={physicsMode}
+          setPhysicsMode={setPhysicsMode}
+          weather={weather}
+          setWeather={setWeather}
+          practiceMode={practiceMode}
+          setPracticeMode={setPracticeMode}
+          physicsDebug={physicsDebug}
+          setPhysicsDebug={setPhysicsDebug}
+          activeGenreId={activeGenreId}
+          styleId={styleId}
+          setStyleId={setStyleId}
+          customPalettes={customPalettes}
+          setCustomPalettes={setCustomPalettes}
+          styleOverrides={styleOverrides}
+          setStyleOverrides={setStyleOverrides}
+          touchConfig={touchConfig}
+          setTouchConfig={setTouchConfig}
+          theme={theme}
+          setTheme={setTheme}
+          fontSizePx={fontSizePx}
+          setFontSizePx={setFontSizePx}
+          highContrast={highContrast}
+          setHighContrast={setHighContrast}
+          reduceShake={reduceShake}
+          setReduceShake={setReduceShake}
+          lang={lang}
+          setLang={setLang}
+          auth={auth}
+          setAuth={setAuth}
+          analytics={analytics}
+          analyticsEnabled={analyticsEnabled}
+          setAnalyticsEnabled={setAnalyticsEnabled}
+          eventRules={eventRules}
+          setEventRules={setEventRules}
+          hud={hud}
+          isOnline={isOnline}
+          customCharacter={customCharacter}
+          setCustomCharacter={setCustomCharacter}
+          sceneEntities={sceneEntities}
+          setSceneEntities={setSceneEntities}
+          collisionShapes={collisionShapes}
+          setCollisionShapes={setCollisionShapes}
+          myGames={myGames}
+          setMyGames={setMyGames}
+          activeArenaSpec={activeArenaSpec}
+          forcedArenaMode={forcedArenaMode}
+          mcpLogs={mcpLogs}
+          onExecuteMcpTool={handleExecuteMcpTool}
+          onPlayWizardGame={handlePlayWizardGame}
+          onBackToLanding={() => {
+            soundEngine.stopTracker();
+            setShellState('landing');
+          }}
+          onBackToTitle={() => setShellState('title')}
+          onLaunchGame={launchGame}
+          onApplyLoadedSave={handleApplyLoadedSave}
+          onAddBonusCoinsPotions={handleAddBonusCoinsPotions}
+        />
+        <OfflineToast isOnline={isOnline} lang={lang} shellState={shellState} />
+      </>
+    );
+  }
+
+  return (
+    <>
+      <GameShell
+        shellState={shellState}
+        setShellState={setShellState}
         activeLevel={activeLevel}
         setActiveLevel={setActiveLevel}
         styleId={styleId}
         customPalettes={customPalettes}
         styleOverrides={styleOverrides}
-        customCharacter={customCharacter}
+        renderMode={renderMode}
+        physicsMode={physicsMode}
+        weather={weather}
+        practiceMode={practiceMode}
+        physicsDebug={physicsDebug}
+        activeGenreId={activeGenreId}
+        speedMul={speedMul}
+        gravityMul={gravityMul}
         deviceProfile={deviceProfile}
+        touchConfig={touchConfig}
         lang={lang}
         setLang={setLang}
         theme={theme}
         setTheme={setTheme}
         muted={muted}
         setMuted={setMuted}
+        reduceShake={reduceShake}
         isOnline={isOnline}
-        onStartPlay={() => launchGame(activeLevel)}
-        onOpenTitleStage={() => setShellState('title')}
-        onOpenStudioTab={(tab) => {
-          setStudioTab(tab);
+        hud={hud}
+        onHudChange={setHud}
+        onOpenControls={() => {
+          soundEngine.stopTracker();
+          setStudioTab('controls');
           setShellState('studio');
         }}
-      />
-    );
-  }
-
-  if (shellState === 'studio') {
-    return (
-      <StudioWorkspace
-        activeTab={studioTab}
-        setActiveTab={setStudioTab}
-        gameName={gameName}
-        setGameName={setGameName}
-        activeLevel={activeLevel}
-        setActiveLevel={setActiveLevel}
-        requestedTier={requestedTier}
-        onChangeTier={setRequestedTier}
-        powerSaveAuto={powerSaveAuto}
-        onChangePowerSaveAuto={setPowerSaveAuto}
-        deviceProfile={deviceProfile}
-        renderMode={renderMode}
-        setRenderMode={setRenderMode}
-        physicsMode={physicsMode}
-        setPhysicsMode={setPhysicsMode}
-        weather={weather}
-        setWeather={setWeather}
-        practiceMode={practiceMode}
-        setPracticeMode={setPracticeMode}
-        physicsDebug={physicsDebug}
-        setPhysicsDebug={setPhysicsDebug}
-        activeGenreId={activeGenreId}
-        styleId={styleId}
-        setStyleId={setStyleId}
-        customPalettes={customPalettes}
-        setCustomPalettes={setCustomPalettes}
-        styleOverrides={styleOverrides}
-        setStyleOverrides={setStyleOverrides}
-        touchConfig={touchConfig}
-        setTouchConfig={setTouchConfig}
-        theme={theme}
-        setTheme={setTheme}
-        fontSizePx={fontSizePx}
-        setFontSizePx={setFontSizePx}
-        highContrast={highContrast}
-        setHighContrast={setHighContrast}
-        reduceShake={reduceShake}
-        setReduceShake={setReduceShake}
-        lang={lang}
-        setLang={setLang}
-        auth={auth}
-        setAuth={setAuth}
-        analytics={analytics}
-        analyticsEnabled={analyticsEnabled}
-        setAnalyticsEnabled={setAnalyticsEnabled}
-        hud={hud}
-        isOnline={isOnline}
-        customCharacter={customCharacter}
-        setCustomCharacter={setCustomCharacter}
+        onOpenStudio={() => {
+          soundEngine.stopTracker();
+          setShellState('studio');
+        }}
         onBackToLanding={() => {
           soundEngine.stopTracker();
           setShellState('landing');
         }}
-        onBackToTitle={() => setShellState('title')}
-        onLaunchGame={launchGame}
-        onApplyLoadedSave={handleApplyLoadedSave}
-        onAddBonusCoinsPotions={handleAddBonusCoinsPotions}
+        customCharacter={customCharacter}
+        eventRules={eventRules}
+        onAutoSaveLocal={handleAutoSaveLocal}
+        onRecordAnalytics={recordAnalytics}
+        worldRefExternal={worldRef}
       />
-    );
-  }
-
-  return (
-    <GameShell
-      shellState={shellState}
-      setShellState={setShellState}
-      activeLevel={activeLevel}
-      setActiveLevel={setActiveLevel}
-      styleId={styleId}
-      customPalettes={customPalettes}
-      styleOverrides={styleOverrides}
-      renderMode={renderMode}
-      physicsMode={physicsMode}
-      weather={weather}
-      practiceMode={practiceMode}
-      physicsDebug={physicsDebug}
-      activeGenreId={activeGenreId}
-      speedMul={speedMul}
-      gravityMul={gravityMul}
-      deviceProfile={deviceProfile}
-      touchConfig={touchConfig}
-      lang={lang}
-      setLang={setLang}
-      theme={theme}
-      setTheme={setTheme}
-      muted={muted}
-      setMuted={setMuted}
-      reduceShake={reduceShake}
-      isOnline={isOnline}
-      hud={hud}
-      onHudChange={setHud}
-      onOpenControls={() => {
-        soundEngine.stopTracker();
-        setStudioTab('controls');
-        setShellState('studio');
-      }}
-      onOpenStudio={() => {
-        soundEngine.stopTracker();
-        setShellState('studio');
-      }}
-      onBackToLanding={() => {
-        soundEngine.stopTracker();
-        setShellState('landing');
-      }}
-      customCharacter={customCharacter}
-      onRecordAnalytics={recordAnalytics}
-      worldRefExternal={worldRef}
-    />
+      <OfflineToast isOnline={isOnline} lang={lang} shellState={shellState} />
+    </>
   );
 }

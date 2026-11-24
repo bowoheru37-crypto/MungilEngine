@@ -17,6 +17,14 @@ import { isCircleInViewport, isPointInViewport, isRectInViewport } from '../engi
 import { createDeviceProfile, updateDynamicResolution } from '../engine/deviceProfiler.ts';
 import { ParticlePool, SoAWorld } from '../engine/ecs.ts';
 import {
+  createBoneSpringState,
+  ENGINE_LAYERS,
+  evaluateCharacterFsm,
+  evaluateHardenedRules,
+  stepBonePoseSpring,
+  validateMoveBounds,
+} from '../engine/engineCore.ts';
+import {
   createLevelWorld,
   LEVEL_DEFINITIONS,
   selectVisualNovelChoice,
@@ -33,7 +41,27 @@ import {
   generateSfxSpec,
   generateTerrainSpec,
 } from '../engine/generators.ts';
+import { I18N_MAP } from '../engine/i18n.ts';
 import { project3D } from '../engine/pseudo3d.ts';
+import {
+  askQolbuAgent,
+  buildWizardGameSpec,
+  LOCAL_MCP_TOOLS,
+  QOLBU_ENGINE_TOPICS,
+  TUTORIAL_STEPS,
+} from '../engine/qolbuAgent.ts';
+import {
+  computeWorldTransform,
+  createArenaWorld,
+  DEFAULT_COLLISION_SHAPES,
+  DEFAULT_SCENE_ENTITIES,
+  evaluateShapeOverlaps,
+  groupEntities,
+  PHYSICS_PRESETS,
+  stepArenaWorld,
+  triggerArenaPlayerAction,
+  ungroupContainer,
+} from '../engine/scenePhysics.ts';
 import { buildSavePayload, parseAndMigrateSave } from '../engine/storage.ts';
 
 const IDLE_INPUT: SimInput = {
@@ -387,3 +415,162 @@ test('Genre templates simulate authentically across Top-Down, Bullet Hell, Runne
   assert.equal(mv.doubleJumpsLeft, 0);
   assert.ok(mv.player.vy < -200);
 });
+
+test('FD Lite v2 FSM table, 2-bone damped cloak spring, and Qolbu validateMoveBounds security guard', () => {
+  assert.equal(
+    evaluateCharacterFsm('idle', { ko: true, hurt: true, dashing: true, attacking: true, grounded: true, vy: 0, vx: 0 }),
+    'ko'
+  );
+  assert.equal(
+    evaluateCharacterFsm('idle', { ko: false, hurt: false, dashing: true, attacking: false, grounded: false, vy: 100, vx: 200 }),
+    'dash'
+  );
+  assert.equal(
+    evaluateCharacterFsm('idle', { ko: false, hurt: false, dashing: false, attacking: false, grounded: true, vy: 0, vx: 80 }),
+    'walk'
+  );
+
+  const spring = createBoneSpringState();
+  for (let i = 0; i < 15; i++) {
+    stepBonePoseSpring(spring, 'walk', 200, -40, 1 / 30);
+  }
+  assert.ok(Number.isFinite(spring.cloakOffsetX) && Math.abs(spring.cloakOffsetX) <= 16);
+  assert.ok(Number.isFinite(spring.cloakOffsetY) && Math.abs(spring.cloakOffsetY) <= 12);
+
+  // NaN exploit rejected cleanly
+  const nanRes = validateMoveBounds(100, 200, Number.NaN, 200, 1 / 30, 400, { minX: 16, maxX: 1100, minY: 20, maxY: 460 });
+  assert.equal(nanRes.valid, false);
+  assert.equal(nanRes.reason, 'nan');
+  assert.equal(nanRes.x, 100);
+
+  // Speed hack teleport clamped cleanly
+  const spdRes = validateMoveBounds(100, 200, 9999, 200, 1 / 30, 400, { minX: 16, maxX: 1100, minY: 20, maxY: 460 });
+  assert.equal(spdRes.valid, false);
+  assert.equal(spdRes.reason, 'speed');
+  assert.ok(spdRes.x < 200);
+});
+
+test('Live No-Code EventSheetRules, 15Hz Eco AI decimation, 7-Layer Engine & Offline Toast i18n work end-to-end', () => {
+  const world = createLevelWorld(1);
+  world.player.hp = 20;
+  const rules = [
+    { id: 'r1', enabled: true, condition: 'ON_SHARD_COLLECT' as const, action: 'ADD_SCORE_25' as const },
+    { id: 'r2', enabled: true, condition: 'ON_LOW_HP' as const, action: 'HEAL_15' as const },
+  ];
+  // Put player on shard 1 with low HP and Eco 15Hz AI enabled
+  world.player.x = world.shards[0].x;
+  world.player.y = world.shards[0].y;
+  stepGameWorld(world, IDLE_INPUT, 1 / 30, { ...DEFAULT_CFG, ecoAi15Hz: true, eventRules: rules });
+
+  // Shard gives +250, rule adds +25 => >= 275; ON_LOW_HP rule heals +15 => 35 HP
+  assert.ok(world.score >= 275);
+  assert.equal(world.player.hp, 35);
+  assert.equal(world.simStepTick, 1);
+
+  const eco = createDeviceProfile('eco', true);
+  const hardened = evaluateHardenedRules(eco, {
+    simMs: 2.0,
+    renderMs: 6.0,
+    frameMs: 18.0,
+    drawCalls: 14,
+    culledCount: 8,
+    heapMb: 18,
+    aiHz: 15,
+  });
+  assert.equal(hardened.length, 9);
+  assert.ok(hardened.every((r) => r.status === 'pass'));
+  assert.equal(ENGINE_LAYERS.length, 7);
+
+  for (const langCode of ['id', 'en', 'ja', 'ko', 'es'] as const) {
+    assert.equal(I18N_MAP[langCode].offlineToastTitle, 'Offline Mode');
+    assert.ok(I18N_MAP[langCode].offlineToastBody.length > 10);
+  }
+});
+
+test('Physics Presets, Group Entities (keep-world), Ungroup, and Collision Shape overlap detection work accurately', () => {
+  assert.deepEqual(Object.keys(PHYSICS_PRESETS), ['NORMAL', 'BOUNCY', 'HEAVY', 'GHOST', 'SLIPPERY', 'BALL']);
+  assert.equal(PHYSICS_PRESETS.GHOST.isTrigger, true);
+  assert.equal(PHYSICS_PRESETS.BOUNCY.restitution > PHYSICS_PRESETS.HEAVY.restitution, true);
+
+  const bowoBefore = computeWorldTransform(DEFAULT_SCENE_ENTITIES[0], DEFAULT_SCENE_ENTITIES);
+  const grouped = groupEntities(DEFAULT_SCENE_ENTITIES, ['ent_bowo', 'ent_qolbu'], 'Duo Cahaya');
+  assert.ok(grouped.containerId);
+  const bowoGroupedNode = grouped.nodes.find((n) => n.id === 'ent_bowo')!;
+  const bowoAfter = computeWorldTransform(bowoGroupedNode, grouped.nodes);
+  assert.ok(Math.abs(bowoBefore.x - bowoAfter.x) < 0.05);
+  assert.ok(Math.abs(bowoBefore.y - bowoAfter.y) < 0.05);
+
+  const movedNodes = grouped.nodes.map((n) => (n.id === grouped.containerId ? { ...n, x: n.x + 25 } : n));
+  const bowoMoved = computeWorldTransform(movedNodes.find((n) => n.id === 'ent_bowo')!, movedNodes);
+  assert.ok(Math.abs(bowoMoved.x - (bowoBefore.x + 25)) < 0.05);
+
+  const ungrouped = ungroupContainer(movedNodes, grouped.containerId!);
+  assert.equal(ungrouped.some((n) => n.id === grouped.containerId), false);
+  const bowoUngrouped = computeWorldTransform(ungrouped.find((n) => n.id === 'ent_bowo')!, ungrouped);
+  assert.ok(Math.abs(bowoUngrouped.x - (bowoBefore.x + 25)) < 0.05);
+
+  // Force two shapes to overlap and confirm penetration readout
+  const overlappingEntities = DEFAULT_SCENE_ENTITIES.map((e) =>
+    e.id === 'ent_qolbu' ? { ...e, x: DEFAULT_SCENE_ENTITIES[0].x + 10, y: DEFAULT_SCENE_ENTITIES[0].y } : e
+  );
+  const overlap = evaluateShapeOverlaps('shp_bowo', DEFAULT_COLLISION_SHAPES, overlappingEntities);
+  assert.equal(overlap.status, 'overlap');
+  assert.ok(overlap.items.some((it) => it.otherShapeId === 'shp_qolbu' && it.hit && it.penetrationPx > 0));
+});
+
+test('Agen Qolbu, 16 Local MCP tools, Wizard Game Builder, and Qolbu Arena AI (Solo / Co-Play / Adaptive VS) work end-to-end', () => {
+  assert.equal(TUTORIAL_STEPS.length, 10);
+  assert.equal(QOLBU_ENGINE_TOPICS.length, 12);
+  assert.equal(LOCAL_MCP_TOOLS.length, 16);
+
+  const reply = askQolbuAgent('Bagaimana cara kerja Zero-GC di Itel A70?');
+  assert.equal(reply.recommendedTab, 'lab');
+
+  const customGame = buildWizardGameSpec({
+    name: 'Uji Coba Arena',
+    genre: 'Arena',
+    sprite: 'Bowo',
+    characterName: 'Bowo',
+    preset: 'BOUNCY',
+    map: 'Arena Qolbu',
+    enemies: 2,
+    items: 3,
+    aiMode: 'Bareng',
+    difficulty: 'Normal',
+    durationSec: 60,
+  });
+  assert.equal(customGame.name, 'Uji Coba Arena');
+
+  // 1. Solo AI moves autonomously toward objective on 15Hz ticks
+  const solo = createArenaWorld('solo', customGame);
+  const x0 = solo.player.x;
+  for (let i = 0; i < 8; i++) {
+    stepArenaWorld(solo, 1 / 30, { moveX: 0, moveY: 0 }, { coachDirective: 'Agresif', companionOrder: 'Ikut', speedMul: 1 });
+  }
+  assert.notEqual(solo.player.x, x0);
+
+  // 2. Co-Play Qolbu auto-heals low HP and provides 1x revive
+  const coplay = createArenaWorld('coplay', customGame);
+  coplay.player.hp = 25;
+  stepArenaWorld(coplay, 1 / 30, { moveX: 0, moveY: 0 }, { coachDirective: 'Seimbang', companionOrder: 'Ikut', speedMul: 1 });
+  stepArenaWorld(coplay, 1 / 30, { moveX: 0, moveY: 0 }, { coachDirective: 'Seimbang', companionOrder: 'Ikut', speedMul: 1 });
+  assert.ok(coplay.player.hp >= 45);
+
+  coplay.player.hp = 0;
+  stepArenaWorld(coplay, 1 / 30, { moveX: 0, moveY: 0 }, { coachDirective: 'Seimbang', companionOrder: 'Ikut', speedMul: 1 });
+  assert.equal(coplay.companionReviveLeft, 0);
+  assert.equal(coplay.status, 'playing');
+
+  // 3. VS Boss Kala adapts after repeated Dash Right moves
+  const vs = createArenaWorld('vs');
+  vs.player.facing = 1;
+  for (let i = 0; i < 3; i++) {
+    vs.player.dashCd = 0;
+    triggerArenaPlayerAction(vs, 'dash');
+  }
+  stepArenaWorld(vs, 1 / 30, { moveX: 0, moveY: 0 }, { coachDirective: 'Seimbang', companionOrder: 'Ikut', speedMul: 1 });
+  stepArenaWorld(vs, 1 / 30, { moveX: 0, moveY: 0 }, { coachDirective: 'Seimbang', companionOrder: 'Ikut', speedMul: 1 });
+  assert.ok(vs.adaptiveRule.includes('KIRI'));
+});
+
+

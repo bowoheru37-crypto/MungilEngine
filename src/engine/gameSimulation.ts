@@ -1,6 +1,15 @@
 import { GENRE_TEMPLATES } from './catalogs';
+import {
+  createBoneSpringState,
+  evaluateCharacterFsm,
+  stepBonePoseSpring,
+  validateMoveBounds,
+} from './engineCore';
 import type {
+  BoneSpringState,
+  CharacterAnimState,
   EnemyArchetype,
+  EventSheetRule,
   GenreSimulationKind,
   HudSnapshot,
   LevelDefinition,
@@ -278,6 +287,8 @@ export interface SimConfig {
   practiceMode: boolean;
   speedMul: number;
   gravityMul: number;
+  ecoAi15Hz?: boolean;
+  eventRules?: EventSheetRule[];
 }
 
 export interface SimEventOut {
@@ -353,6 +364,10 @@ export interface GameWorld {
   potions: number;
   dialogue: string;
   nextEntityId: number;
+  simStepTick: number;
+  lowHpRuleCooldown: number;
+  playerPose: CharacterAnimState;
+  cloakSpring: BoneSpringState;
 }
 
 const VN_SCENES: Array<{ prompt: string; choices: VnChoiceOption[] }> = [
@@ -584,6 +599,10 @@ export function createLevelWorld(
     potions: carry?.potions ?? 2,
     dialogue: def.subtitleId,
     nextEntityId: 100,
+    simStepTick: 0,
+    lowHpRuleCooldown: 0,
+    playerPose: 'idle',
+    cloakSpring: createBoneSpringState(),
   };
 }
 
@@ -669,6 +688,8 @@ export function stepGameWorld(
 
   const dt = Math.min(0.05, Math.max(0.001, dtRaw));
   world.time += dt;
+  world.simStepTick += 1;
+  world.lowHpRuleCooldown = Math.max(0, world.lowHpRuleCooldown - dt);
   world.shakeTrauma = Math.max(0, world.shakeTrauma - dt * 1.9);
 
   // Hitstop freeze frame for crisp impact feel (camera shake & flash still decay)
@@ -679,6 +700,8 @@ export function stepGameWorld(
 
   const def = LEVEL_DEFINITIONS[world.level];
   const p = world.player;
+  const prevPlayerX = p.x;
+  const prevPlayerY = p.y;
   const sim = world.simKind;
   const isFree2D = sim === 'topdown' || sim === 'shooter';
 
@@ -967,10 +990,19 @@ export function stepGameWorld(
 
   // Integrate physics & world collisions
   if (isFree2D) {
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
-    p.x = Math.max(20, Math.min(def.width - 20, p.x));
-    p.y = Math.max(48, Math.min(def.height - 28, p.y));
+    const rawX = p.x + p.vx * dt;
+    const rawY = p.y + p.vy * dt;
+    const stepGuard = validateMoveBounds(
+      prevPlayerX,
+      prevPlayerY,
+      rawX,
+      rawY,
+      dt,
+      Math.max(520, maxMoveSpeed * 2.5),
+      { minX: 20, maxX: def.width - 20, minY: 48, maxY: def.height - 28 }
+    );
+    p.x = stepGuard.x;
+    p.y = stepGuard.y;
 
     // Top-Down obstacle pillar AABB resolution
     for (const obs of world.obstacles) {
@@ -995,10 +1027,19 @@ export function stepGameWorld(
   } else if (sim !== 'runner' && sim !== 'rhythm') {
     const prevBottom = p.y + p.h * 0.5;
     p.vy += gravity * dt;
-    p.x += p.vx * dt;
-    p.y += p.vy * dt;
-
-    p.x = Math.max(20, Math.min(def.width - 20, p.x));
+    const rawX = p.x + p.vx * dt;
+    const rawY = p.y + p.vy * dt;
+    const stepGuard = validateMoveBounds(
+      prevPlayerX,
+      prevPlayerY,
+      rawX,
+      rawY,
+      dt,
+      Math.max(600, maxMoveSpeed * 2.8),
+      { minX: 20, maxX: def.width - 20, minY: 20, maxY: def.height + 32 }
+    );
+    p.x = stepGuard.x;
+    p.y = stepGuard.y;
     p.grounded = false;
 
     // One-way platforms
@@ -1029,6 +1070,26 @@ export function stepGameWorld(
       p.grounded = true;
     }
   }
+
+  // Qolbu Final Finite & World-Bounds Safety Clamp
+  if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) {
+    p.x = prevPlayerX;
+    p.y = prevPlayerY;
+  }
+  p.x = Math.max(16, Math.min(def.width - 16, p.x));
+  p.y = Math.max(20, Math.min(def.height + 32, p.y));
+
+  // FD Lite v2 Table-Driven FSM + 2-Bone Damped Cloak Spring
+  world.playerPose = evaluateCharacterFsm(world.playerPose, {
+    ko: p.koTimer > 0,
+    hurt: p.flash > 0.08,
+    dashing: p.dashTimer > 0,
+    attacking: p.attackTimer > 0,
+    grounded: p.grounded,
+    vy: p.vy,
+    vx: p.vx,
+  });
+  stepBonePoseSpring(world.cloakSpring, world.playerPose, p.vx, p.vy, dt);
 
   // Coin Collector Magnet Aura + Continuous Gold Respawn
   if (sim === 'collector') {
@@ -1081,10 +1142,12 @@ export function stepGameWorld(
   }
 
   // Collectibles: Coins
+  let coinTriggered = false;
   for (const c of world.coins) {
     if (c.collected) continue;
     if (Math.hypot(p.x - c.x, p.y - c.y) <= (sim === 'runner' ? 42 : 28)) {
       c.collected = true;
+      coinTriggered = true;
       world.coinsTotal = Math.min(9999, world.coinsTotal + 5);
       world.score += sim === 'collector' ? 120 : 50;
       world.floatingTexts.push({ x: c.x, y: c.y - 12, vy: -35, text: sim === 'collector' ? '+120 FEVER' : '+5 Koin', color: '#facc15', life: 0.7 });
@@ -1093,10 +1156,12 @@ export function stepGameWorld(
   }
 
   // Collectibles: Light Shards
+  let shardTriggered = false;
   for (const s of world.shards) {
     if (s.collected) continue;
     if (Math.hypot(p.x - s.x, p.y - s.y) <= (sim === 'runner' ? 48 : 30)) {
       s.collected = true;
+      shardTriggered = true;
       world.shardsTotal += 1;
       world.score += 250;
       world.floatingTexts.push({ x: s.x, y: s.y - 16, vy: -38, text: '+1 Pecahan Cahaya', color: '#38bdf8', life: 0.9 });
@@ -1106,10 +1171,12 @@ export function stepGameWorld(
   }
 
   // Floor Switches (Level 2 & 3, and Top-Down Puzzle)
+  let switchTriggered = false;
   for (const sw of world.switches) {
     const swDistY = isFree2D ? Math.abs(p.y - sw.y) : Math.abs(p.y + p.h * 0.5 - sw.y);
     if (!sw.active && Math.abs(p.x - sw.x) <= 30 && swDistY <= (isFree2D ? 28 : 22)) {
       sw.active = true;
+      switchTriggered = true;
       world.score += 150;
       world.floatingTexts.push({ x: sw.x, y: sw.y - 20, vy: -36, text: 'Saklar Aktif!', color: '#34d399', life: 0.9 });
       events.push({ type: 'sfx', detail: 'switch', x: sw.x - world.cameraX });
@@ -1117,9 +1184,11 @@ export function stepGameWorld(
     }
   }
 
-  // Enemies & Attack Token Pool
+  // Enemies & Attack Token Pool (15Hz AI perception decimation on Eco / Itel A70 tier)
+  const runAiPerception = !config.ecoAi15Hz || world.simStepTick % 2 === 1;
   let activeTokens = world.enemies.filter((e) => !e.dead && e.koTimer <= 0 && e.hasToken).length;
   const hitCoreRadius = sim === 'shooter' && world.genreId === 'bullet_hell' ? 6 : 16;
+  let bossPhaseChanged = false;
 
   for (const e of world.enemies) {
     if (e.dead) continue;
@@ -1144,6 +1213,7 @@ export function stepGameWorld(
       const nextPhase: 1 | 2 | 3 = ratio <= 0.34 ? 3 : ratio <= 0.67 ? 2 : 1;
       if (nextPhase !== e.bossPhase) {
         e.bossPhase = nextPhase;
+        bossPhaseChanged = true;
         world.shakeTrauma = Math.min(1, world.shakeTrauma + 0.55);
         world.dialogue =
           nextPhase === 2
@@ -1154,8 +1224,15 @@ export function stepGameWorld(
       }
     }
 
-    // Acquire attack token if within engagement range
-    if (!e.hasToken && e.attackCooldown <= 0 && dist < 310 && activeTokens < def.maxAttackTokens && sim !== 'visual_novel') {
+    // Acquire attack token if within engagement range (15Hz perception decimated on Eco)
+    if (
+      runAiPerception &&
+      !e.hasToken &&
+      e.attackCooldown <= 0 &&
+      dist < 310 &&
+      activeTokens < def.maxAttackTokens &&
+      sim !== 'visual_novel'
+    ) {
       e.hasToken = true;
       activeTokens += 1;
       e.telegraphTimer = e.telegraphMax;
@@ -1308,6 +1385,43 @@ export function stepGameWorld(
   // Gate Unlock Check (Genre-Aware + Classic Shard/Switch/Boss Rule)
   const collectedShards = world.shards.filter((s) => s.collected).length;
   const activeSwitches = world.switches.filter((s) => s.active).length;
+
+  // Execute live No-Code Event Sheet Rules (WHEN -> THEN)
+  if (config.eventRules && config.eventRules.length > 0) {
+    const allSwitchesActive = world.switches.length > 0 && activeSwitches >= world.switches.length;
+    const isLowHp = p.hp > 0 && p.hp < 30 && world.lowHpRuleCooldown <= 0;
+
+    for (let i = 0; i < config.eventRules.length; i++) {
+      const rule = config.eventRules[i];
+      if (!rule.enabled) continue;
+      let matched = false;
+      if (rule.condition === 'ON_COLLISION_COIN' && coinTriggered) matched = true;
+      else if (rule.condition === 'ON_SHARD_COLLECT' && shardTriggered) matched = true;
+      else if (rule.condition === 'ON_LOW_HP' && isLowHp) {
+        matched = true;
+        world.lowHpRuleCooldown = 6.0;
+      } else if (rule.condition === 'ON_SWITCH_ALL' && switchTriggered && allSwitchesActive) matched = true;
+      else if (rule.condition === 'ON_BOSS_PHASE' && bossPhaseChanged) matched = true;
+
+      if (!matched) continue;
+
+      if (rule.action === 'ADD_SCORE_25') {
+        world.score += 25;
+        world.floatingTexts.push({ x: p.x, y: p.y - 34, vy: -32, text: 'Rule +25', color: '#a78bfa', life: 0.7 });
+      } else if (rule.action === 'HEAL_15') {
+        p.hp = Math.min(p.maxHp, p.hp + 15);
+        world.floatingTexts.push({ x: p.x, y: p.y - 36, vy: -34, text: 'Rule +15 HP', color: '#4ade80', life: 0.8 });
+      } else if (rule.action === 'SPAWN_BURST') {
+        events.push({ type: 'hit', x: p.x - world.cameraX });
+        events.push({ type: 'sfx', detail: 'burst', x: p.x - world.cameraX });
+      } else if (rule.action === 'PLAY_CHIME') {
+        events.push({ type: 'sfx', detail: 'shard', x: p.x - world.cameraX });
+      } else if (rule.action === 'OPEN_GATE' && !world.gateUnlocked) {
+        world.gateUnlocked = true;
+        events.push({ type: 'sfx', detail: 'gate', x: def.gate.x - world.cameraX });
+      }
+    }
+  }
   const bossAlive = world.enemies.some((e) => e.archetype === 'boss_kala' && !e.dead && e.koTimer <= 0);
   const enemiesAlive = world.enemies.some((e) => !e.dead && e.koTimer <= 0);
   const nextUnlocked =

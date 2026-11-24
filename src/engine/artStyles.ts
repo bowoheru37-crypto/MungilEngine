@@ -2,6 +2,7 @@ import { drawCharacter3DStack } from './pseudo3d';
 import type {
   ArtStyleId,
   ArtStyleSpec,
+  BoneSpringState,
   CharacterAnimState,
   EnemyArchetype,
   GeneratedCharacterSpec,
@@ -214,6 +215,7 @@ export interface CharacterRenderOpts {
   comboStep?: number;
   rig3d?: boolean;
   yaw?: number;
+  spring?: BoneSpringState;
   customChar?: GeneratedCharacterSpec;
   overrides: StyleOverrides;
 }
@@ -310,12 +312,17 @@ export function drawBowoCharacter(
     ctx.fill();
   }
 
-  // Flowing cloak / scarf
+  // Flowing cloak / scarf (2-bone damped spring physics from FD Lite v2)
+  const springX = opts.spring ? opts.spring.cloakOffsetX * opts.facing : 0;
+  const springY = opts.spring ? opts.spring.cloakOffsetY : 0;
   ctx.fillStyle = cloakColor;
   ctx.beginPath();
   ctx.moveTo(-size * 0.22, -size * 0.1);
-  ctx.lineTo(-size * 0.58 - Math.sin(opts.time * 8) * 3, size * 0.34);
-  ctx.lineTo(-size * 0.15, size * 0.38);
+  ctx.lineTo(
+    -size * 0.58 + springX - Math.sin(opts.time * 8) * 3,
+    size * 0.34 + springY
+  );
+  ctx.lineTo(-size * 0.15 + springX * 0.4, size * 0.38 + springY * 0.35);
   ctx.closePath();
   ctx.fill();
 

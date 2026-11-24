@@ -1,6 +1,18 @@
 export type GameShellState = 'landing' | 'title' | 'playing' | 'paused' | 'victory' | 'gameover' | 'studio';
 
-export type StudioTab = 'play' | 'assets' | 'generators' | 'controls' | 'art' | 'lab' | 'skills' | 'services' | 'export';
+export type StudioTab =
+  | 'play'
+  | 'scene'
+  | 'assets'
+  | 'generators'
+  | 'controls'
+  | 'art'
+  | 'lab'
+  | 'agent'
+  | 'arena'
+  | 'skills'
+  | 'services'
+  | 'export';
 
 export type ArtStyleId =
   | 'pixel'
@@ -370,4 +382,136 @@ export interface AgentSkillFile {
   summary: string;
   content: string;
 }
+
+export interface BoneSpringState {
+  cloakOffsetX: number;
+  cloakVelX: number;
+  cloakOffsetY: number;
+  cloakVelY: number;
+  blendAlpha: number;
+  prevPose: CharacterAnimState;
+}
+
+export interface EngineLayerSpec {
+  layer: number;
+  id: string;
+  title: string;
+  subtitle: string;
+  mobileStrategy: string;
+  itelA70Budget: string;
+  systems: Array<{ code: string; name: string; detail: string }>;
+}
+
+export interface HardenedRuleCheck {
+  code: string;
+  title: string;
+  status: 'pass' | 'warn';
+  metric: string;
+}
+
+export interface FrameBudgetMetrics {
+  simMs: number;
+  renderMs: number;
+  frameMs: number;
+  drawCalls: number;
+  culledCount: number;
+  heapMb: number;
+  aiHz: 15 | 30 | 60;
+}
+
+export type PhysicsPresetId = 'NORMAL' | 'BOUNCY' | 'HEAVY' | 'GHOST' | 'SLIPPERY' | 'BALL';
+
+export interface PhysicsPresetSpec {
+  id: PhysicsPresetId;
+  label: string;
+  mass: number;
+  friction: number;
+  restitution: number;
+  gravityScale: number;
+  linearDamp: number;
+  bounceThreshold: number;
+  isTrigger: boolean;
+  bodyType: 'Dynamic' | 'Kinematic';
+  shape: 'Box' | 'Circle';
+  ccd: boolean;
+  alpha: number;
+  note: string;
+}
+
+export interface SceneEntityNode {
+  id: string;
+  name: string;
+  type: 'Player' | 'NPC' | 'Enemy' | 'Item' | 'Prop' | 'Trigger' | 'CONTAINER';
+  x: number;
+  y: number;
+  sx: number;
+  sy: number;
+  rot: number;
+  parent: string | null;
+  locked: boolean;
+  hidden: boolean;
+  preset: PhysicsPresetId;
+}
+
+export interface CollisionVertex {
+  x: number;
+  y: number;
+}
+
+export interface CollisionShapeSpec {
+  id: string;
+  entityId: string;
+  type: 'Box' | 'Circle' | 'Polygon';
+  w: number;
+  h: number;
+  r: number;
+  ox: number;
+  oy: number;
+  rot: number;
+  color: string;
+  verts: CollisionVertex[];
+}
+
+export interface ShapeOverlapItem {
+  otherShapeId: string;
+  entityName: string;
+  penetrationPx: number;
+  hit: boolean;
+  near: boolean;
+}
+
+export interface ShapeOverlapResult {
+  status: 'none' | 'near' | 'overlap';
+  items: ShapeOverlapItem[];
+}
+
+export type ArenaMode = 'solo' | 'coplay' | 'vs';
+export type ArenaCoachDirective = 'Agresif' | 'Seimbang' | 'Bertahan' | 'Farming';
+export type ArenaCompanionOrder = 'Ikut' | 'Serang' | 'Bertahan' | 'Ambil Item' | 'Heal';
+export type ArenaDifficulty = 'Easy' | 'Normal' | 'Hard';
+
+export interface WizardGameSpec {
+  id: string;
+  name: string;
+  genre: 'Platformer' | 'Fighter' | 'RPG' | 'Runner' | 'Arena';
+  sprite: string;
+  characterName: string;
+  preset: PhysicsPresetId;
+  map: 'Arena Qolbu' | 'Desa Fajar' | 'Jembatan Cahaya';
+  enemies: number;
+  items: number;
+  aiMode: 'Sendiri' | 'Bareng' | 'Lawan';
+  difficulty: ArenaDifficulty;
+  durationSec: number;
+  createdAt: string;
+}
+
+export interface McpToolSpec {
+  id: string;
+  name: string;
+  desc: string;
+  params: string;
+}
+
+
 
