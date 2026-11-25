@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">Mungil Engine</string>
+    <string name="cd_hero_illustration">Mungil Engine Dawn Village and Tower illustration</string>
+    <string name="cd_sound_toggle">Toggle procedural sound</string>
+    <string name="cd_back_home">Back to home</string>
+    <string name="cd_open_studio">Open Studio workspace</string>
+    <string name="cd_pause_game">Pause game</string>
+    <string name="cd_close_dialog">Close dialog</string>
+    <string name="cd_joystick">Virtual movement joystick</string>
+    <string name="action_play_game">Play Game</string>
+    <string name="action_open_studio">Open Studio</string>
+</resources>

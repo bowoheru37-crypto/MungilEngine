@@ -1,7 +1,11 @@
-node_modules/
+.gradle/
 build/
-dist/
-coverage/
+app/build/
+.build-outputs/
+.kotlin/
+.idea/
+local.properties
+*.iml
 .DS_Store
 *.log
 .env*

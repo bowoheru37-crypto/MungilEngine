@@ -1,5 +1,5 @@
 {
-  "name": "Mungil Engine V7 — Bowo: Guardian of Light",
+  "name": "Mungil Engine",
   "description": "Lightweight mobile-first game engine and playable 3-level action-RPG optimized for low-entry Android devices (Itel A70), featuring 12 procedural art styles, zero-GC ECS, customizable touch controls, bytecode VM, offline PWA support, and industry-standard export.",
   "requestFramePermissions": [],
   "majorCapabilities": [
