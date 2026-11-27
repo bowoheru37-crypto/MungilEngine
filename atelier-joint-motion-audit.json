@@ -1,0 +1,153 @@
+{
+  "characterId": "qipao",
+  "bindings": [
+    {
+      "label": "siku +X",
+      "names": [
+        "bone_7",
+        "bone_8",
+        "bone_9"
+      ],
+      "nodes": [
+        19,
+        18,
+        17
+      ],
+      "max": 145,
+      "method": "unsigned-three-point-flexion",
+      "localAxesVerified": false
+    },
+    {
+      "label": "siku −X",
+      "names": [
+        "bone_26",
+        "bone_27",
+        "bone_28"
+      ],
+      "nodes": [
+        38,
+        37,
+        36
+      ],
+      "max": 145,
+      "method": "unsigned-three-point-flexion",
+      "localAxesVerified": false
+    },
+    {
+      "label": "lutut +X",
+      "names": [
+        "bone_44",
+        "bone_45",
+        "bone_46"
+      ],
+      "nodes": [
+        46,
+        45,
+        44
+      ],
+      "max": 135,
+      "method": "unsigned-three-point-flexion",
+      "localAxesVerified": false
+    },
+    {
+      "label": "lutut −X",
+      "names": [
+        "bone_48",
+        "bone_49",
+        "bone_50"
+      ],
+      "nodes": [
+        50,
+        49,
+        48
+      ],
+      "max": 135,
+      "method": "unsigned-three-point-flexion",
+      "localAxesVerified": false
+    }
+  ],
+  "axesCalibrated": false,
+  "checks": "Fleksi tiga titik siku/lutut; bukan validasi semua DOF, hyperextension, kontak, otot, rambut atau kain.",
+  "clips": [
+    {
+      "clip": "walk",
+      "samples": 91,
+      "maxFlexion": [
+        58.11687329298017,
+        37.33164302345625,
+        96.08847562475553,
+        125.12381133425403
+      ],
+      "exceedances": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "clip": "run",
+      "samples": 91,
+      "maxFlexion": [
+        114.17588700097785,
+        82.77574516571613,
+        93.84782877818958,
+        101.22654797213286
+      ],
+      "exceedances": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "clip": "jump",
+      "samples": 91,
+      "maxFlexion": [
+        9.806271983474858,
+        9.448219369326978,
+        29.8663255417147,
+        31.70424858179919
+      ],
+      "exceedances": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "clip": "crouch",
+      "samples": 91,
+      "maxFlexion": [
+        9.806271949106502,
+        9.448219269256725,
+        62.27754161728336,
+        60.17299483285524
+      ],
+      "exceedances": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "clip": "sit",
+      "samples": 91,
+      "maxFlexion": [
+        9.806272679401758,
+        9.448219719714245,
+        89.14452471176287,
+        91.70425432593049
+      ],
+      "exceedances": [
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  ]
+}
